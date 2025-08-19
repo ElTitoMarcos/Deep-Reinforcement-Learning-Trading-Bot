@@ -8,6 +8,8 @@ from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.symbol_discovery import discover_symbols
 from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
+from src.auto.strategy_selector import choose_algo
+from src.auto.hparam_tuner import tune
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
@@ -87,34 +89,121 @@ with st.sidebar:
     step_size = st.number_input("stepSize", value=float(cfg.get("filters",{}).get("stepSize",0.0001)))
 
     st.caption("Reward heads (pesos)")
-    rw = cfg.get("reward_weights", {"pnl":1.0,"turnover_penalty":0.1,"drawdown_penalty":0.2,"volatility_penalty":0.1})
-    w_pnl = st.number_input("w_pnl", value=float(rw.get("pnl",1.0)))
-    w_turn = st.number_input("w_turnover", value=float(rw.get("turnover_penalty",0.1)))
-    w_dd = st.number_input("w_drawdown", value=float(rw.get("drawdown_penalty",0.2)))
-    w_vol = st.number_input("w_volatility", value=float(rw.get("volatility_penalty",0.1)))
+    rw = cfg.get("reward_weights", {"pnl": 1.0, "turn": 0.1, "dd": 0.2, "vol": 0.1})
+    beneficio = st.number_input(
+        "Beneficio (más alto = priorizar ganar dinero)",
+        value=float(rw.get("pnl", 1.0)),
+        help="Sube si buscas ganancias; sugerido 1.0",
+        key="w_pnl",
+    )
+    control_act = st.number_input(
+        "Control de actividad (más alto = operar menos)",
+        value=float(rw.get("turn", 0.1)),
+        help="Sube para operar menos; sugerido 0.1",
+        key="w_turn",
+    )
+    proteccion = st.number_input(
+        "Protección ante rachas malas (más alto = evitar caídas)",
+        value=float(rw.get("dd", 0.2)),
+        help="Sube para evitar caídas; sugerido 0.2",
+        key="w_dd",
+    )
+    suavidad = st.number_input(
+        "Suavidad de resultados (más alto = menos diente de sierra)",
+        value=float(rw.get("vol", 0.1)),
+        help="Sube para suavizar; sugerido 0.1",
+        key="w_vol",
+    )
 
-    st.caption("Algoritmo")
-    algo = st.selectbox("Algo", ["ppo", "dqn"], index=0 if (cfg.get("algo","ppo")=="ppo") else 1)
-    ppo = cfg.get("ppo", {})
-    dqn = cfg.get("dqn", {})
-
-    with st.expander("Hiperparámetros PPO"):
-        ppo_lr = st.number_input("learning_rate", value=float(ppo.get("learning_rate",3e-4)), format="%.8f")
-        ppo_steps = st.number_input("n_steps", value=int(ppo.get("n_steps",2048)))
-        ppo_batch = st.number_input("batch_size", value=int(ppo.get("batch_size",64)))
-        ppo_gamma = st.number_input("gamma", value=float(ppo.get("gamma",0.99)))
-        ppo_lambda = st.number_input("gae_lambda", value=float(ppo.get("gae_lambda",0.95)))
-        ppo_clip = st.number_input("clip_range", value=float(ppo.get("clip_range",0.2)))
-        ppo_ent = st.number_input("ent_coef", value=float(ppo.get("ent_coef",0.01)))
-
-    with st.expander("Hiperparámetros DQN"):
-        dqn_lr = st.number_input("learning_rate ", value=float(dqn.get("learning_rate",1e-3)), format="%.8f")
-        dqn_gamma = st.number_input("gamma ", value=float(dqn.get("gamma",0.99)))
-        dqn_batch = st.number_input("batch_size ", value=int(dqn.get("batch_size",64)))
-        dqn_target = st.number_input("target_update ", value=int(dqn.get("target_update",1000)))
-        dqn_eps_s = st.number_input("epsilon_start", value=float(dqn.get("epsilon_start",1.0)))
-        dqn_eps_e = st.number_input("epsilon_end", value=float(dqn.get("epsilon_end",0.05)))
-        dqn_eps_d = st.number_input("epsilon_decay_steps", value=int(dqn.get("epsilon_decay_steps",10000)))
+    stats = cfg.get("stats", {})
+    env_caps = {"obs_type": "continuous", "action_type": "discrete", "state_space": stats.get("state_space", 100)}
+    choice = choose_algo(stats, env_caps)
+    algo = choice["algo"]
+    cfg["algo"] = algo
+    st.success(f"Algoritmo elegido: {algo} — {choice['reason']}")
+    suggested = tune(algo, stats, [])
+    if algo == "hybrid":
+        ppo_sug = suggested.get("ppo", {})
+        dqn_sug = suggested.get("dqn", {})
+        st.subheader("Hiperparámetros críticos PPO")
+        ppo_lr = st.number_input(
+            "Velocidad de aprendizaje (qué tan rápido aprende)",
+            value=float(ppo_sug.get("learning_rate", 3e-4)),
+            format="%.6f",
+            help=f"Sugerido {ppo_sug.get('learning_rate',3e-4):.2e}",
+            key="ppo_lr",
+        )
+        ppo_batch = st.number_input(
+            "Tamaño de lote (cada cuántos ejemplos actualiza)",
+            value=int(ppo_sug.get("batch_size", 64)),
+            help=f"Sugerido {ppo_sug.get('batch_size',64)}",
+            key="ppo_batch",
+        )
+        ppo_steps = st.number_input(
+            "Horizonte de actualización (pasos antes de actualizar)",
+            value=int(ppo_sug.get("n_steps", 2048)),
+            help=f"Sugerido {ppo_sug.get('n_steps',2048)}",
+            key="ppo_steps",
+        )
+        st.subheader("Hiperparámetros críticos DQN")
+        dqn_lr = st.number_input(
+            "Velocidad de aprendizaje (qué tan rápido aprende) [DQN]",
+            value=float(dqn_sug.get("learning_rate", 1e-3)),
+            format="%.6f",
+            help=f"Sugerido {dqn_sug.get('learning_rate',1e-3):.2e}",
+            key="dqn_lr",
+        )
+        dqn_batch = st.number_input(
+            "Tamaño de lote (cada cuántos ejemplos actualiza) [DQN]",
+            value=int(dqn_sug.get("batch_size", 64)),
+            help=f"Sugerido {dqn_sug.get('batch_size',64)}",
+            key="dqn_batch",
+        )
+        dqn_steps = st.number_input(
+            "Horizonte de actualización (pasos antes de actualizar) [DQN]",
+            value=int(dqn_sug.get("n_steps", 1000)),
+            help=f"Sugerido {dqn_sug.get('n_steps',1000)}",
+            key="dqn_steps",
+        )
+        cfg["ppo"] = {
+            "learning_rate": ppo_lr,
+            "batch_size": int(ppo_batch),
+            "n_steps": int(ppo_steps),
+        }
+        cfg["dqn"] = {
+            "learning_rate": dqn_lr,
+            "batch_size": int(dqn_batch),
+            "target_update": int(dqn_steps),
+        }
+    else:
+        lr = st.number_input(
+            "Velocidad de aprendizaje (qué tan rápido aprende)",
+            value=float(suggested.get("learning_rate", 3e-4)),
+            format="%.6f",
+            help=f"Sugerido {suggested.get('learning_rate',3e-4):.2e}",
+        )
+        batch = st.number_input(
+            "Tamaño de lote (cada cuántos ejemplos actualiza)",
+            value=int(suggested.get("batch_size", 64)),
+            help=f"Sugerido {suggested.get('batch_size',64)}",
+        )
+        horizon = st.number_input(
+            "Horizonte de actualización (pasos antes de actualizar)",
+            value=int(suggested.get("n_steps", 2048)),
+            help=f"Sugerido {suggested.get('n_steps',2048)}",
+        )
+        if algo == "ppo":
+            cfg["ppo"] = {
+                "learning_rate": lr,
+                "batch_size": int(batch),
+                "n_steps": int(horizon),
+            }
+        else:
+            cfg["dqn"] = {
+                "learning_rate": lr,
+                "batch_size": int(batch),
+                "target_update": int(horizon),
+            }
 
     if st.button("💾 Guardar config YAML"):
         import yaml
@@ -128,16 +217,14 @@ with st.sidebar:
             "min_notional_usd": min_notional,
             "filters": {"tickSize": tick_size, "stepSize": step_size},
             "algo": algo,
-            "ppo": {
-                "learning_rate": ppo_lr, "n_steps": int(ppo_steps), "batch_size": int(ppo_batch),
-                "gamma": ppo_gamma, "gae_lambda": ppo_lambda, "clip_range": ppo_clip, "ent_coef": ppo_ent
+            "ppo": cfg.get("ppo", {}),
+            "dqn": cfg.get("dqn", {}),
+            "reward_weights": {
+                "pnl": beneficio,
+                "turn": control_act,
+                "dd": proteccion,
+                "vol": suavidad,
             },
-            "dqn": {
-                "learning_rate": dqn_lr, "gamma": dqn_gamma, "batch_size": int(dqn_batch),
-                "target_update": int(dqn_target), "epsilon_start": dqn_eps_s,
-                "epsilon_end": dqn_eps_e, "epsilon_decay_steps": int(dqn_eps_d)
-            },
-            "reward_weights": {"pnl": w_pnl, "turnover_penalty": w_turn, "drawdown_penalty": w_dd, "volatility_penalty": w_vol},
             "paths": paths_cfg,
         }
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
@@ -172,17 +259,30 @@ if st.button("⬇️ Descargar histórico"):
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
 with colt1:
-    algo_run = st.selectbox("Algoritmo", ["ppo","dqn"], index=0 if algo=="ppo" else 1)
+    st.caption(f"Algoritmo: {algo} — {choice['reason']}")
     timesteps = st.number_input("Timesteps", value=20000, step=1000)
 with colt2:
     st.empty()
+algo_run = algo
 
 if st.button("🚀 Entrenar"):
     import tempfile, yaml
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
         yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
         cfg_path = tmp.name
-    cmd = ["python", "-m", "src.training.train_drl", "--config", cfg_path, "--algo", algo_run, "--timesteps", str(int(timesteps))]
+    cmd = [
+        "python",
+        "-m",
+        "src.training.train_drl",
+        "--config",
+        cfg_path,
+        "--algo",
+        algo_run,
+        "--algo-reason",
+        choice["reason"],
+        "--timesteps",
+        str(int(timesteps)),
+    ]
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
