@@ -31,7 +31,6 @@ with st.sidebar:
     mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
     use_testnet = mode == "Testnet"
     os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
-
     st.caption("Símbolos sugeridos (auto)")
     refresh_syms = st.button("Actualizar", key="refresh_syms")
     if "symbol_checks" not in st.session_state or refresh_syms:
@@ -53,7 +52,6 @@ with st.sidebar:
         checks[manual] = True
     selected_symbols = [s for s, v in checks.items() if v]
     cfg["symbols"] = selected_symbols
-
 
     fees_taker = st.number_input("Fee taker", value=float(cfg.get("fees",{}).get("taker",0.001)), step=0.0001, format="%.6f")
     slippage = st.number_input("Slippage", value=float(cfg.get("slippage",0.0005)), step=0.0001, format="%.6f")
