@@ -1,235 +1,255 @@
+"""Minimal training script for simple DRL agents.
+
+The goal of this module is to provide a tiny yet complete example of how to
+train a Deep Reinforcement Learning agent in the context of the project.  It
+supports a small value-based agent implemented purely with :mod:`numpy` and a
+fallback to :mod:`stable_baselines3` for PPO when available.
+
+Example
+-------
+Running a short training session with the built-in DQN::
+
+    python -m src.training.train_drl --config configs/default.yaml --algo dqn --timesteps 5000
+
+The same entry point is exposed via :mod:`scripts.train` for convenience.
+"""
+
 from __future__ import annotations
-import argparse, os, time, json
+
+import argparse
+import os
+import json
+from dataclasses import dataclass
+from typing import Tuple
+
 import numpy as np
 import pandas as pd
 
+from ..env.trading_env import TradingEnv
 from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger
-from ..env.trading_env import TradingEnv
-from ..policies.router import exploration_scale
-from ..policies.value_based import TinyDQN
 
 
-def linear_schedule(start: float, end: float):
-    """Returns a linear schedule callable for SB3."""
-    def schedule(progress_remaining: float) -> float:
-        return end + (start - end) * progress_remaining
+# ---------------------------------------------------------------------------
+# Tiny DQN -----------------------------------------------------------------
 
-    return schedule
 
-def has_sb3():
-    try:
-        import stable_baselines3 as sb3  # noqa
-        import torch  # noqa
+@dataclass
+class DQNParams:
+    gamma: float = 0.99
+    lr: float = 1e-3
+    buffer_size: int = 10_000
+    batch_size: int = 64
+
+
+class TinyDQN:
+    """Very small linear DQN implemented with :mod:`numpy`.
+
+    The network consists of a single linear layer ``obs_dim × n_actions``.  It
+    is intentionally simplistic but sufficient for demonstration and unit tests
+    without requiring heavy dependencies such as PyTorch.
+    """
+
+    def __init__(self, obs_dim: int, n_actions: int, params: DQNParams):
+        self.W = np.zeros((obs_dim, n_actions), dtype=np.float32)
+        self.gamma = params.gamma
+        self.lr = params.lr
+        self.buffer_size = params.buffer_size
+        self.batch_size = params.batch_size
+        self.memory: list[Tuple[np.ndarray, int, float, np.ndarray, bool]] = []
+        self.n_actions = n_actions
+
+    # ------------------------------------------------------------------
+    def act(self, obs: np.ndarray, epsilon: float) -> int:
+        if np.random.rand() < epsilon:
+            return int(np.random.randint(self.n_actions))
+        q_vals = obs @ self.W
+        return int(np.argmax(q_vals))
+
+    def remember(self, s, a, r, s2, done) -> None:
+        if len(self.memory) >= self.buffer_size:
+            self.memory.pop(0)
+        self.memory.append((s, a, r, s2, done))
+
+    def update(self) -> None:
+        if len(self.memory) < self.batch_size:
+            return
+        idxs = np.random.choice(len(self.memory), self.batch_size, replace=False)
+        batch = [self.memory[i] for i in idxs]
+        states, actions, rewards, next_states, dones = map(np.array, zip(*batch))
+
+        q_next = np.max(next_states @ self.W, axis=1)
+        targets = rewards + self.gamma * (1 - dones.astype(np.float32)) * q_next
+        q_vals = states @ self.W
+        q_sa = q_vals[np.arange(self.batch_size), actions]
+        diff = q_sa - targets
+        for i in range(self.batch_size):
+            self.W[:, actions[i]] -= self.lr * diff[i] * states[i]
+
+    def save(self, path: str) -> None:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        np.savez(path, W=self.W)
+
+
+# ---------------------------------------------------------------------------
+# Helper functions ----------------------------------------------------------
+
+
+def has_sb3() -> bool:
+    try:  # pragma: no cover - optional dependency
+        import stable_baselines3  # noqa: F401
+        import torch  # noqa: F401
         return True
-    except Exception:
+    except Exception:  # pragma: no cover - optional dependency
         return False
 
-def train_with_sb3(env, cfg, timesteps: int, algo: str="ppo", outdir: str="checkpoints", *, data_mode: str="known", exploration: float = 1.0):
-    from stable_baselines3 import PPO, DQN
-    os.makedirs(outdir, exist_ok=True)
-    meta: dict[str, float] = {
-        "algo": algo.lower(),
-        "timesteps": timesteps,
-        "data_mode": data_mode,
-        "exploration_scale": exploration,
-    }
-    if algo.lower() == "ppo":
-        ppo_cfg = cfg.get("ppo", {})
-        ent_start = float(ppo_cfg.get("entropy_start", ppo_cfg.get("ent_coef", 0.01)))
-        ent_end = float(ppo_cfg.get("entropy_end", ent_start))
-        ent_schedule = ent_start if ent_start == ent_end else linear_schedule(ent_start, ent_end)
-        model = PPO(
-            "MlpPolicy",
-            env,
-            verbose=1,
-            learning_rate=ppo_cfg.get("learning_rate", 3e-4),
-            gamma=ppo_cfg.get("gamma", 0.99),
-            ent_coef=ent_schedule,
-            batch_size=ppo_cfg.get("batch_size", 64),
-            n_steps=ppo_cfg.get("n_steps", 2048),
-        )
-        meta.update({"entropy_start": ent_start, "entropy_end": ent_end})
-    else:
-        dqn_cfg = cfg.get("dqn", {})
-        eps_start = float(dqn_cfg.get("epsilon_start", 1.0))
-        eps_end = float(dqn_cfg.get("epsilon_end", 0.05))
-        eps_steps = int(dqn_cfg.get("epsilon_decay_steps", timesteps // 2 or 1))
-        model = DQN(
-            "MlpPolicy",
-            env,
-            verbose=1,
-            learning_rate=dqn_cfg.get("learning_rate", 1e-3),
-            gamma=dqn_cfg.get("gamma", 0.99),
-            batch_size=dqn_cfg.get("batch_size", 64),
-            target_update_interval=dqn_cfg.get("target_update", 1000),
-            exploration_initial_eps=eps_start,
-            exploration_final_eps=eps_end,
-            exploration_fraction=eps_steps / float(timesteps),
-        )
-        meta.update({"epsilon_start": eps_start, "epsilon_end": eps_end, "epsilon_decay_steps": eps_steps})
-    model.learn(total_timesteps=timesteps)
-    path = os.path.join(outdir, f"{algo}_model.zip")
-    model.save(path)
-    with open(os.path.splitext(path)[0] + "_config.json", "w") as fh:
-        json.dump(meta, fh)
-    return path
 
-def train_minimal_dqn(env, cfg, timesteps: int, outdir: str="checkpoints", *, data_mode: str="known", exploration: float = 1.0):
-    os.makedirs(outdir, exist_ok=True)
-    dqn_cfg = cfg.get("dqn", {})
-    eps_start = float(dqn_cfg.get("epsilon_start", 1.0))
-    eps_end = float(dqn_cfg.get("epsilon_end", 0.05))
-    eps_decay = int(dqn_cfg.get("epsilon_decay_steps", timesteps//2 or 1))
-    agent = TinyDQN(
-        obs_dim=env.observation_space.shape[0],
-        n_actions=env.action_space.n,
-        gamma=float(dqn_cfg.get("gamma", 0.99)),
-        lr=float(dqn_cfg.get("learning_rate", 1e-3)),
-        buffer_size=int(dqn_cfg.get("buffer_size", 10000)),
-        batch_size=int(dqn_cfg.get("batch_size", 64)),
-    )
-    obs, _ = env.reset()
-    for t in range(timesteps):
-        eps = max(eps_end, eps_start - (eps_start - eps_end) * (t / eps_decay))
-        a = agent.select_action(obs, epsilon=eps)
-        obs2, r, done, trunc, info = env.step(a)
-        agent.remember(obs, a, r, obs2, done or trunc)
-        agent.learn(steps=1)
-        obs = obs2
-        if done or trunc:
-            obs, _ = env.reset()
-    path = os.path.join(outdir, "dqn_minimal.npz")
-    np.savez(path, W=agent.W)
-    meta = {
-        "algo": "dqn_minimal",
-        "epsilon_start": eps_start,
-        "epsilon_end": eps_end,
-        "epsilon_decay_steps": eps_decay,
-        "timesteps": timesteps,
-        "data_mode": data_mode,
-        "exploration_scale": exploration,
-    }
-    with open(os.path.splitext(path)[0] + "_config.json", "w") as fh:
-        json.dump(meta, fh)
-    return path
+def load_data(cfg: dict, data_path: str | None, timesteps: int) -> pd.DataFrame:
+    """Load price data or generate synthetic series if not available."""
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--config", type=str, default="configs/default.yaml")
-    ap.add_argument("--algo", type=str, default=None, help="ppo|dqn (si None usa config)")
-    ap.add_argument("--timesteps", type=int, default=10000)
-    ap.add_argument("--data", type=str, default=None, help="ruta parquet/csv; si no, usa paths del config")
-    ap.add_argument("--eps-start", type=float, default=None)
-    ap.add_argument("--eps-end", type=float, default=None)
-    ap.add_argument("--eps-steps", type=int, default=None)
-    ap.add_argument("--entropy-start", type=float, default=None)
-    ap.add_argument("--entropy-end", type=float, default=None)
-    args = ap.parse_args()
+    if data_path:
+        return load_table(data_path)
 
-    cfg = load_config(args.config)
-    algo = (args.algo or cfg.get("algo","ppo")).lower()
-    if args.eps_start is not None:
-        cfg.setdefault("dqn", {})["epsilon_start"] = args.eps_start
-    if args.eps_end is not None:
-        cfg.setdefault("dqn", {})["epsilon_end"] = args.eps_end
-    if args.eps_steps is not None:
-        cfg.setdefault("dqn", {})["epsilon_decay_steps"] = args.eps_steps
-    if args.entropy_start is not None:
-        cfg.setdefault("ppo", {})["entropy_start"] = args.entropy_start
-    if args.entropy_end is not None:
-        cfg.setdefault("ppo", {})["entropy_end"] = args.entropy_end
-
-    router_cfg = cfg.get("router", {})
-    data_mode = router_cfg.get("data_mode", "known")
-    exp_scale = exploration_scale(data_mode)
-    if algo == "dqn":
-        dqn_cfg = cfg.setdefault("dqn", {})
-        base_start = float(dqn_cfg.get("epsilon_start", 1.0))
-        base_end = float(dqn_cfg.get("epsilon_end", 0.05))
-        dqn_cfg["epsilon_start"] = min(1.0, base_start * exp_scale)
-        dqn_cfg["epsilon_end"] = min(1.0, base_end * exp_scale)
-    elif algo == "ppo":
-        ppo_cfg = cfg.setdefault("ppo", {})
-        base_start = float(ppo_cfg.get("entropy_start", ppo_cfg.get("ent_coef", 0.01)))
-        base_end = float(ppo_cfg.get("entropy_end", base_start))
-        ppo_cfg["entropy_start"] = base_start * exp_scale
-        ppo_cfg["entropy_end"] = base_end * exp_scale
     paths = cfg.get("paths", {})
     raw_dir = paths.get("raw_dir", "data/raw")
+    exchange = cfg.get("exchange", "binance")
+    symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
+    timeframe = cfg.get("timeframe", "1m")
+    fname = os.path.join(raw_dir, exchange, symbol.replace("/", "-"), f"{timeframe}.parquet")
+
+    if os.path.exists(fname):  # pragma: no branch - depends on repo data
+        return load_table(fname)
+
+    # generate simple random walk prices
+    n = max(timesteps + 1, 1_000)
+    rng = np.random.default_rng(0)
+    prices = np.cumsum(rng.normal(0, 1, size=n)) + 100.0
+    df = pd.DataFrame({"open": prices, "high": prices, "low": prices, "close": prices})
+    return df
+
+
+def quick_eval(env: TradingEnv, agent: TinyDQN) -> float:
+    """Run a fast evaluation episode and return final equity."""
+
+    eval_env = TradingEnv(env.df)
+    obs, _ = eval_env.reset()
+    done = False
+    while not done:
+        action = agent.act(obs, epsilon=0.0)
+        obs, _, done, _, _ = eval_env.step(action)
+    return float(eval_env.equity)
+
+
+def train_dqn(
+    env: TradingEnv,
+    cfg: dict,
+    timesteps: int,
+    *,
+    outdir: str = "checkpoints",
+    checkpoint_freq: int = 10,
+) -> str:
+    """Train the tiny DQN agent with episode/step loops."""
+
+    dqn_cfg = cfg.get("dqn", {})
+    params = DQNParams(
+        gamma=dqn_cfg.get("gamma", 0.99),
+        lr=dqn_cfg.get("learning_rate", 1e-3),
+        buffer_size=dqn_cfg.get("buffer_size", 10_000),
+        batch_size=dqn_cfg.get("batch_size", 64),
+    )
+    agent = TinyDQN(env.observation_space.shape[0], env.action_space.n, params)
+
+    eps_start = dqn_cfg.get("epsilon_start", 1.0)
+    eps_end = dqn_cfg.get("epsilon_end", 0.05)
+    eps_decay_steps = dqn_cfg.get("epsilon_decay_steps", timesteps // 2 or 1)
+
+    total_steps = 0
+    episode = 0
+    while total_steps < timesteps:
+        obs, _ = env.reset()
+        done = False
+        episode += 1
+        while not done and total_steps < timesteps:
+            eps = max(eps_end, eps_start - (eps_start - eps_end) * (total_steps / eps_decay_steps))
+            action = agent.act(obs, eps)
+            next_obs, reward, done, trunc, _info = env.step(action)
+            agent.remember(obs, action, reward, next_obs, done or trunc)
+            agent.update()
+            obs = next_obs
+            total_steps += 1
+
+        if checkpoint_freq and episode % checkpoint_freq == 0:
+            ckpt = os.path.join(outdir, f"dqn_ep{episode}.npz")
+            agent.save(ckpt)
+            equity = quick_eval(env, agent)
+            print(f"[checkpoint] episode={episode} equity={equity:.2f}")
+
+    final_path = os.path.join(outdir, "dqn_final.npz")
+    agent.save(final_path)
+    meta = {
+        "algo": "dqn",
+        "timesteps": timesteps,
+        "checkpoint_freq": checkpoint_freq,
+    }
+    os.makedirs(outdir, exist_ok=True)
+    with open(os.path.join(outdir, "dqn_meta.json"), "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    return final_path
+
+
+# ---------------------------------------------------------------------------
+# PPO via SB3 (optional) ----------------------------------------------------
+
+
+def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str) -> str:
+    from stable_baselines3 import PPO  # pragma: no cover - optional dependency
+
+    os.makedirs(outdir, exist_ok=True)
+    ppo_cfg = cfg.get("ppo", {})
+    model = PPO("MlpPolicy", env, verbose=1, learning_rate=ppo_cfg.get("learning_rate", 3e-4))
+    model.learn(total_timesteps=timesteps)
+    path = os.path.join(outdir, "ppo_model.zip")
+    model.save(path)
+    return path
+
+
+# ---------------------------------------------------------------------------
+# CLI ----------------------------------------------------------------------
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Train tiny DRL agents")
+    parser.add_argument("--config", default="configs/default.yaml")
+    parser.add_argument("--algo", default="dqn", help="dqn|ppo")
+    parser.add_argument("--timesteps", type=int, default=10_000)
+    parser.add_argument("--data", type=str, default=None, help="Optional path to CSV/Parquet data")
+    parser.add_argument("--checkpoint-freq", type=int, default=10)
+    args = parser.parse_args()
+
+    cfg = load_config(args.config)
+    df = load_data(cfg, args.data, args.timesteps)
+    env = TradingEnv(df)
+
+    paths = cfg.get("paths", {})
     logs_dir = paths.get("logs_dir", "logs")
     os.makedirs(logs_dir, exist_ok=True)
     logger = ensure_logger(os.path.join(logs_dir, "train.jsonl"))
-
-    exchange = cfg.get("exchange","binance")
-    symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
-    timeframe = cfg.get("timeframe","1m")
-    if args.data:
-        df = load_table(args.data)
-    else:
-        data_path = os.path.join(raw_dir, exchange, symbol.replace("/","-"), f"{timeframe}.parquet")
-        df = load_table(data_path)
-
-    env = TradingEnv(df, reward_weights=cfg.get("reward_weights"), fees=cfg.get("fees",{}).get("taker",0.001), slippage=cfg.get("slippage",0.0005))
-
     logger.log("INFO", "env_ready", obs_dim=int(env.observation_space.shape[0]), actions=int(env.action_space.n))
-    if algo == "dqn":
-        dqn_cfg = cfg.get("dqn", {})
-        logger.log(
-            "INFO",
-            "train_config",
-            algo="dqn",
-            data_mode=data_mode,
-            exploration_scale=exp_scale,
-            epsilon_start=dqn_cfg.get("epsilon_start"),
-            epsilon_end=dqn_cfg.get("epsilon_end"),
-            epsilon_decay_steps=dqn_cfg.get("epsilon_decay_steps"),
-        )
-    elif algo == "ppo":
-        ppo_cfg = cfg.get("ppo", {})
-        logger.log(
-            "INFO",
-            "train_config",
-            algo="ppo",
-            data_mode=data_mode,
-            exploration_scale=exp_scale,
-            entropy_start=ppo_cfg.get("entropy_start"),
-            entropy_end=ppo_cfg.get("entropy_end", ppo_cfg.get("entropy_start")),
-        )
 
-    if has_sb3() and algo == "ppo":
-        out = train_with_sb3(
-            env,
-            cfg,
-            args.timesteps,
-            algo="ppo",
-            outdir=paths.get("checkpoints_dir", "checkpoints"),
-            data_mode=data_mode,
-            exploration=exp_scale,
-        )
-    elif has_sb3() and algo == "dqn":
-        out = train_with_sb3(
-            env,
-            cfg,
-            args.timesteps,
-            algo="dqn",
-            outdir=paths.get("checkpoints_dir", "checkpoints"),
-            data_mode=data_mode,
-            exploration=exp_scale,
-        )
-    else:
-        out = train_minimal_dqn(
-            env,
-            cfg,
-            args.timesteps,
-            outdir=paths.get("checkpoints_dir", "checkpoints"),
-            data_mode=data_mode,
-            exploration=exp_scale,
-        )
+    if args.algo.lower() == "dqn":
+        out = train_dqn(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"), checkpoint_freq=args.checkpoint_freq)
+    elif args.algo.lower() == "ppo":
+        if not has_sb3():  # pragma: no cover - optional dependency
+            raise RuntimeError("stable-baselines3 is required for PPO training")
+        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"))
+    else:  # pragma: no cover
+        raise ValueError(f"Unknown algorithm: {args.algo}")
 
-    logger.log("INFO", "training_done", algo=algo, artifact=out)
+    logger.log("INFO", "training_done", algo=args.algo, artifact=out)
     print(f"Saved model/checkpoint to: {out}")
 
-if __name__ == "__main__":
+
+if __name__ == "__main__":  # pragma: no cover
     main()
+
