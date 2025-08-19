@@ -16,10 +16,12 @@ REQUIRED_OHLCV_COLUMNS = [
     "source",
 ]
 
-def ensure_dir(path: str):
+def ensure_dir(path: str) -> None:
+    """Create ``path`` if it does not already exist."""
     os.makedirs(path, exist_ok=True)
 
-def save_table(df: pd.DataFrame, path: str):
+def save_table(df: pd.DataFrame, path: str) -> None:
+    """Save ``df`` to ``path`` inferring the format from the extension."""
     ensure_dir(os.path.dirname(path))
     ext = os.path.splitext(path)[1].lower()
     if ext == ".csv":
@@ -58,6 +60,15 @@ def save_universe(df: pd.DataFrame, path: str) -> str:
     df = df[UNIVERSE_COLUMNS].copy()
     save_table(df, path)
     return path
+
+
+def load_universe(path: str) -> pd.DataFrame:
+    """Load a previously saved universe table ensuring column order."""
+    df = load_table(path)
+    missing = set(UNIVERSE_COLUMNS) - set(df.columns)
+    if missing:
+        raise ValueError(f"missing columns: {missing}")
+    return df[UNIVERSE_COLUMNS].copy()
 
 
 def validate_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
