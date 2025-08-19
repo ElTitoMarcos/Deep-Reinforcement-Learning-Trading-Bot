@@ -33,8 +33,9 @@ import pandas as pd
 
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
+from ..auto.timeframe_adapter import propose_timeframe
 from ..utils.config import load_config
-from ..utils.data_io import load_table
+from ..utils.data_io import load_table, resample_to
 from ..utils.logging import ensure_logger, config_hash
 from ..utils import paths
 from ..utils.device import get_device, set_cpu_threads
@@ -303,11 +304,19 @@ def train_value_dqn(
     llm_client = None
     llm_file = None
     llm_every = int(llm_cfg.get("every_n") or 0)
+    llm_mode = llm_cfg.get("mode", "episodes")
+    last_llm_time = time.time()
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
         llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
+
+    auto_cfg = cfg.get("auto", {})
+    stage_eps = int(auto_cfg.get("timeframe_every_episodes", 0))
+    base_tf = cfg.get("timeframe", "1m")
+    base_df = env.df.copy()
+    current_tf = base_tf
 
     total_steps = 0
     episode = 0
@@ -324,7 +333,41 @@ def train_value_dqn(
     backoff = 60.0
     while total_steps < timesteps:
         try:
-            obs, _ = env.reset()
+            seed_override = None
+            if stage_eps and episode % stage_eps == 0:
+                returns = env.df["close"].pct_change().dropna()
+                recent_vol = float(returns.rolling(20).std().iloc[-1]) if not returns.empty else 0.0
+                gaps = np.diff(env.df["ts"].to_numpy())
+                step = pd.Series(gaps).mode().iloc[0] if len(gaps) else 0
+                gap_ratio = float((gaps > step * 1.5).mean()) if step else 0.0
+                stats = {
+                    "recent_volatility": recent_vol,
+                    "gap_ratio": gap_ratio,
+                    "device": dqn_cfg.get("device", "cpu"),
+                    "batch_size": dqn_cfg.get("batch_size", 64),
+                    "base_tf": base_tf,
+                    "current_tf": current_tf,
+                }
+                vol_prof = auto_cfg.get("vol_profile", {"high": 0.02, "low": 0.005})
+                lat_budget = 1.0 if dqn_cfg.get("device") == "cuda" else 0.5
+                proposal = propose_timeframe(stats, vol_prof, lat_budget, llm_client if llm_cfg.get("enabled") else None)
+                if proposal["resample_to"] != current_tf:
+                    current_tf = proposal["resample_to"]
+                    new_df = resample_to(base_df, current_tf)
+                    env = TradingEnv(new_df, cfg=env.cfg)
+                    seed_override = random.randint(0, 2**32 - 1)
+                    logger.log(
+                        "INFO",
+                        "timeframe_adapted",
+                        base=proposal["base_tf"],
+                        resample=current_tf,
+                        reason=proposal["reason"],
+                        seed=seed_override,
+                    )
+                    print(
+                        f"Timeframe adaptado: base={proposal['base_tf']} \u2192 resample={current_tf} (motivo: {proposal['reason']})"
+                    )
+            obs, _ = env.reset(seed=seed_override)
             done = False
             episode += 1
             ep_reward = 0.0
@@ -336,9 +379,27 @@ def train_value_dqn(
                 obs = next_obs
                 total_steps += 1
                 ep_reward += reward
+                now = time.time()
+                if (
+                    llm_client
+                    and llm_mode == "minutes"
+                    and llm_every > 0
+                    and now - last_llm_time >= llm_every * 60
+                ):
+                    mean_reward = (total_reward + ep_reward) / max(1, episode)
+                    _maybe_call_llm(
+                        cfg,
+                        "dqn",
+                        episode,
+                        mean_reward,
+                        env,
+                        llm_client,
+                        llm_file,
+                        logger,
+                    )
+                    last_llm_time = now
 
                 if continuous:
-                    now = time.time()
                     if checkpoint_interval_min and now - last_ckpt >= checkpoint_interval_min * 60:
                         _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
                         last_ckpt = now
@@ -358,7 +419,12 @@ def train_value_dqn(
                         return final_path
 
             total_reward += ep_reward
-            if llm_client and episode % llm_every == 0:
+            if (
+                llm_client
+                and llm_mode == "episodes"
+                and llm_every > 0
+                and episode % llm_every == 0
+            ):
                 mean_reward = total_reward / episode
                 _maybe_call_llm(
                     cfg,
@@ -426,11 +492,19 @@ def train_dqn(
     llm_client = None
     llm_file = None
     llm_every = int(llm_cfg.get("every_n") or 0)
+    llm_mode = llm_cfg.get("mode", "episodes")
+    last_llm_time = time.time()
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
         llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
+
+    auto_cfg = cfg.get("auto", {})
+    stage_eps = int(auto_cfg.get("timeframe_every_episodes", 0))
+    base_tf = cfg.get("timeframe", "1m")
+    base_df = env.df.copy()
+    current_tf = base_tf
 
     eps_start = dqn_cfg.get("epsilon_start", 1.0)
     eps_end = dqn_cfg.get("epsilon_end", 0.05)
@@ -440,7 +514,41 @@ def train_dqn(
     episode = 0
     total_reward = 0.0
     while total_steps < timesteps:
-        obs, _ = env.reset()
+        seed_override = None
+        if stage_eps and episode % stage_eps == 0:
+            returns = env.df["close"].pct_change().dropna()
+            recent_vol = float(returns.rolling(20).std().iloc[-1]) if not returns.empty else 0.0
+            gaps = np.diff(env.df["ts"].to_numpy())
+            step = pd.Series(gaps).mode().iloc[0] if len(gaps) else 0
+            gap_ratio = float((gaps > step * 1.5).mean()) if step else 0.0
+            stats = {
+                "recent_volatility": recent_vol,
+                "gap_ratio": gap_ratio,
+                "device": dqn_cfg.get("device", "cpu"),
+                "batch_size": dqn_cfg.get("batch_size", 64),
+                "base_tf": base_tf,
+                "current_tf": current_tf,
+            }
+            vol_prof = auto_cfg.get("vol_profile", {"high": 0.02, "low": 0.005})
+            lat_budget = 1.0 if dqn_cfg.get("device") == "cuda" else 0.5
+            proposal = propose_timeframe(stats, vol_prof, lat_budget, llm_client if llm_cfg.get("enabled") else None)
+            if proposal["resample_to"] != current_tf:
+                current_tf = proposal["resample_to"]
+                new_df = resample_to(base_df, current_tf)
+                env = TradingEnv(new_df, cfg=env.cfg)
+                seed_override = random.randint(0, 2**32 - 1)
+                logger.log(
+                    "INFO",
+                    "timeframe_adapted",
+                    base=proposal["base_tf"],
+                    resample=current_tf,
+                    reason=proposal["reason"],
+                    seed=seed_override,
+                )
+                print(
+                    f"Timeframe adaptado: base={proposal['base_tf']} \u2192 resample={current_tf} (motivo: {proposal['reason']})"
+                )
+        obs, _ = env.reset(seed=seed_override)
         done = False
         episode += 1
         ep_reward = 0.0
@@ -453,9 +561,33 @@ def train_dqn(
             obs = next_obs
             total_steps += 1
             ep_reward += reward
+            now = time.time()
+            if (
+                llm_client
+                and llm_mode == "minutes"
+                and llm_every > 0
+                and now - last_llm_time >= llm_every * 60
+            ):
+                mean_reward = (total_reward + ep_reward) / max(1, episode)
+                _maybe_call_llm(
+                    cfg,
+                    "dqn",
+                    episode,
+                    mean_reward,
+                    env,
+                    llm_client,
+                    llm_file,
+                    logger,
+                )
+                last_llm_time = now
 
         total_reward += ep_reward
-        if llm_client and episode % llm_every == 0:
+        if (
+            llm_client
+            and llm_mode == "episodes"
+            and llm_every > 0
+            and episode % llm_every == 0
+        ):
             mean_reward = total_reward / episode
             _maybe_call_llm(
                 cfg,
