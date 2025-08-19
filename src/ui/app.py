@@ -4,7 +4,7 @@ import streamlit as st
 
 from src.utils.config import load_config
 from src.utils.paths import ensure_dirs_exist, get_raw_dir
-from src.data.ccxt_loader import get_exchange, fetch_ohlcv, simulate_1s_from_1m, save_history
+from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.symbol_discovery import discover_symbols
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
@@ -53,8 +53,6 @@ with st.sidebar:
     selected_symbols = [s for s, v in checks.items() if v]
     cfg["symbols"] = selected_symbols
 
-    timeframe = st.selectbox("Timeframe", ["1s","1m","3m","5m","15m"], index=1)
-
     fees_taker = st.number_input("Fee taker", value=float(cfg.get("fees",{}).get("taker",0.001)), step=0.0001, format="%.6f")
     slippage = st.number_input("Slippage", value=float(cfg.get("slippage",0.0005)), step=0.0001, format="%.6f")
     min_notional = st.number_input("Mínimo notional USD", value=float(cfg.get("min_notional_usd",10.0)), step=1.0)
@@ -98,7 +96,7 @@ with st.sidebar:
             "exchange": "binance",
             "binance_use_testnet": use_testnet,
             "symbols": selected_symbols,
-            "timeframe": timeframe,
+            "timeframe": cfg.get("timeframe", "1m"),
             "fees": {"taker": fees_taker, "maker": cfg.get("fees", {}).get("maker", fees_taker)},
             "slippage": slippage,
             "min_notional_usd": min_notional,
@@ -122,11 +120,8 @@ with st.sidebar:
         st.success(f"Guardado {CONFIG_PATH}")
 
 st.subheader("📥 Datos")
-col1, col2 = st.columns(2)
-with col1:
-    dl_timeframe = st.selectbox("Timeframe descarga", ["1s","1m","3m","5m","15m"], index=1, key="dl_tf")
-with col2:
-    since = st.text_input("Desde (ISO UTC, ej. 2024-01-01)", value="", key="since_iso")
+st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
+since = st.text_input("Desde (ISO UTC, ej. 2024-01-01)", value="", key="since_iso")
 st.write("Seleccionados: " + ", ".join(selected_symbols))
 if st.button("⬇️ Descargar histórico"):
     try:
@@ -140,12 +135,10 @@ if st.button("⬇️ Descargar histórico"):
             except Exception:
                 since_ms = None
         for sym in selected_symbols:
-            df = fetch_ohlcv(ex, sym, timeframe=dl_timeframe, since=since_ms)
-            if dl_timeframe == "1s" and df.empty:
-                st.warning(f"1s no disponible en {sym}; simulando desde 1m")
-                df_1m = fetch_ohlcv(ex, sym, timeframe="1m", since=since_ms)
-                df = simulate_1s_from_1m(df_1m)
-            path = save_history(df, str(raw_dir), "binance", sym, dl_timeframe)
+            df = fetch_ohlcv(ex, sym, since=since_ms)
+            tf = df.attrs.get("timeframe", cfg.get("timeframe", "1m"))
+            cfg["timeframe"] = tf
+            path = save_history(df, str(raw_dir), "binance", sym, tf)
             st.success(f"Guardado: {path}")
     except Exception as e:
         st.error(f"Error en descarga: {e}")
