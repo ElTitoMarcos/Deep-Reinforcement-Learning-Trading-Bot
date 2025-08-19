@@ -42,7 +42,9 @@ from ..utils.device import get_device, set_cpu_threads
 from ..policies.value_based import ValueBasedPolicy
 from ..llm import LLMClient, SYSTEM_PROMPT, build_periodic_prompt
 from ..data.refresh_worker import start_refresh_worker, stop_refresh_worker, dataset_updated
+from ..utils.health import memory_guard, time_guard
 
+import gc
 
 # ---------------------------------------------------------------------------
 # Tiny DQN -----------------------------------------------------------------
@@ -405,11 +407,25 @@ def train_value_dqn(
                             logger,
                         )
                         last_llm_time = now
-    
+
                     if continuous:
                         if checkpoint_interval_min and now - last_ckpt >= checkpoint_interval_min * 60:
+                            last_ckpt = last_heartbeat = now
+                            if not memory_guard():
+                                logger.log("WARN", "memory_guard_triggered")
+                                print("Memoria excedida, reiniciando entorno")
+                                gc.collect()
+                                _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
+                                env = TradingEnv(resample_to(base_df, current_tf), cfg=env.cfg)
+                                break
                             _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
-                            last_ckpt = now
+                        if not time_guard(last_heartbeat):
+                            logger.log("WARN", "timeout_guard_triggered")
+                            print("Timeout sin progreso, reiniciando etapa")
+                            _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
+                            env = TradingEnv(resample_to(base_df, current_tf), cfg=env.cfg)
+                            last_ckpt = last_heartbeat = time.time()
+                            break
                         if now - last_heartbeat >= 300:
                             mean_reward = (total_reward + ep_reward) / max(1, episode)
                             hhmm = time.strftime("%H:%M", time.gmtime(now - start_time))
