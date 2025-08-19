@@ -5,6 +5,8 @@ from collections import deque
 from datetime import datetime, UTC
 from typing import Deque, Dict, Iterator, Optional, Set
 
+from src.reports.human_friendly import episode_sentence
+
 _LOG_BUFFER: Deque[Dict[str, object]] = deque(maxlen=1000)
 
 _EVENT_MAP = {
@@ -23,6 +25,10 @@ _EVENT_MAP = {
     "checkpoint_saved": (
         lambda r: f"Checkpoint guardado (pasos={getattr(r, 'steps', '?')})",
         "checkpoints",
+    ),
+    "episode_metrics": (
+        lambda r: episode_sentence(getattr(r, "metrics", {})),
+        "metricas",
     ),
 }
 
