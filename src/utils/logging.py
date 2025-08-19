@@ -1,5 +1,5 @@
 from __future__ import annotations
-import os, sys, json, time
+import os, sys, json, time, subprocess, hashlib
 from typing import Any, Dict
 
 class JsonLogger:
@@ -43,3 +43,21 @@ class JsonLogger:
 def ensure_logger(path: str | None) -> JsonLogger:
     os.makedirs(os.path.dirname(path), exist_ok=True) if path else None
     return JsonLogger(path)
+
+
+# ---------------------------------------------------------------------------
+# Metadata helpers ----------------------------------------------------------
+
+def config_hash(cfg: Dict[str, Any]) -> str:
+    """Deterministic SHA256 hash for a configuration dictionary."""
+    data = json.dumps(cfg, sort_keys=True)
+    return hashlib.sha256(data.encode("utf-8")).hexdigest()
+
+
+def get_commit() -> str | None:
+    """Return the current git commit hash if available."""
+    try:
+        out = subprocess.check_output(["git", "rev-parse", "HEAD"], stderr=subprocess.DEVNULL)
+        return out.decode().strip()
+    except Exception:  # pragma: no cover - git may be unavailable
+        return None
