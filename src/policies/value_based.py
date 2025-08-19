@@ -1,50 +1,113 @@
 from __future__ import annotations
-from collections import deque
+import os
+from dataclasses import dataclass
 import numpy as np
-from typing import Tuple
+import torch
+import torch.nn.functional as F
 
-class TinyDQN:
-    """Minimal DQN skeleton: NOT for production. For smoke tests and interface only."""
-    def __init__(self, obs_dim: int, n_actions: int, gamma: float = 0.99, lr: float = 1e-3, buffer_size: int = 10000, batch_size: int = 64, seed: int = 42):
-        self.obs_dim = obs_dim
+from .nets import MLP
+from .replay_buffer import ReplayBuffer
+
+
+@dataclass
+class DQNConfig:
+    gamma: float = 0.99
+    learning_rate: float = 1e-3
+    buffer_size: int = 10000
+    batch_size: int = 64
+    target_update: int = 1000
+    epsilon_start: float = 1.0
+    epsilon_end: float = 0.05
+    epsilon_decay_steps: int = 10000
+    hidden_sizes: tuple[int, ...] = (64, 64)
+    model_path: str = "models/dqn.pt"
+    device: str = "cpu"
+    seed: int = 0
+
+
+class ValueBasedPolicy:
+    """Simple value-based policy using a DQN-style network."""
+
+    def __init__(self, obs_dim: int, n_actions: int, config: dict | DQNConfig | None = None):
+        if config is None:
+            config = DQNConfig()
+        elif isinstance(config, dict):
+            config = DQNConfig(**config)
+        self.cfg = config
         self.n_actions = n_actions
-        self.gamma = gamma
-        self.lr = lr
-        self.batch_size = batch_size
-        self.rng = np.random.default_rng(seed)
-        self.buffer = deque(maxlen=buffer_size)
-        # Tabular-ish linear weights
-        self.W = self.rng.normal(scale=0.01, size=(obs_dim, n_actions))
+        self.device = torch.device(config.device)
+        torch.manual_seed(config.seed)
 
-    def q_values(self, obs: np.ndarray) -> np.ndarray:
-        return obs @ self.W  # linear
+        self.q_net = MLP(obs_dim, config.hidden_sizes, n_actions).to(self.device)
+        self.target_net = MLP(obs_dim, config.hidden_sizes, n_actions).to(self.device)
+        self.target_net.load_state_dict(self.q_net.state_dict())
+        self.target_net.eval()
 
-    def select_action(self, obs: np.ndarray, epsilon: float) -> int:
-        if self.rng.random() < epsilon:
-            return int(self.rng.integers(0, self.n_actions))
-        q = self.q_values(obs)
-        return int(np.argmax(q))
+        self.optim = torch.optim.Adam(self.q_net.parameters(), lr=config.learning_rate)
+        self.buffer = ReplayBuffer(config.buffer_size, seed=config.seed)
 
-    def remember(self, s, a, r, s2, d):
-        self.buffer.append((s, a, r, s2, d))
+        self.gamma = config.gamma
+        self.epsilon = config.epsilon_start
+        self.eps_end = config.epsilon_end
+        self.eps_decay = (config.epsilon_start - config.epsilon_end) / max(1, config.epsilon_decay_steps)
+        self.target_update = config.target_update
+        self.step_count = 0
+        self.model_path = config.model_path
 
-    def learn(self, steps: int = 1):
-        if len(self.buffer) < self.batch_size:
-            return
-        for _ in range(steps):
-            idx = self.rng.choice(len(self.buffer), size=self.batch_size, replace=False)
-            batch = [self.buffer[i] for i in idx]
-            S = np.stack([b[0] for b in batch])
-            A = np.array([b[1] for b in batch], dtype=int)
-            R = np.array([b[2] for b in batch], dtype=float)
-            S2 = np.stack([b[3] for b in batch])
-            D = np.array([b[4] for b in batch], dtype=bool)
-            Q = S @ self.W
-            Q2 = S2 @ self.W
-            target = Q.copy()
-            max_next = np.max(Q2, axis=1)
-            for i in range(self.batch_size):
-                target[i, A[i]] = R[i] + (0.0 if D[i] else self.gamma * max_next[i])
-            # simple gradient step
-            grad = (Q - target) / self.batch_size
-            self.W -= self.lr * (S.T @ grad)
+        self.load(self.model_path)  # load weights if available
+
+    # --------- Inference ---------
+    def act(self, obs: np.ndarray) -> int:
+        """Epsilon-greedy action selection."""
+        if np.random.rand() < self.epsilon:
+            action = int(np.random.randint(0, self.n_actions))
+        else:
+            obs_t = torch.tensor(obs, dtype=torch.float32, device=self.device).unsqueeze(0)
+            with torch.no_grad():
+                q_vals = self.q_net(obs_t)
+            action = int(torch.argmax(q_vals, dim=1).item())
+        # decay epsilon
+        self.epsilon = max(self.eps_end, self.epsilon - self.eps_decay)
+        return action
+
+    # --------- Memory ---------
+    def remember(self, state: np.ndarray, action: int, reward: float, next_state: np.ndarray, done: bool) -> None:
+        self.buffer.push(state, action, reward, next_state, done)
+
+    # --------- Training ---------
+    def train_step(self) -> float | None:
+        if len(self.buffer) < self.cfg.batch_size:
+            return None
+        states, actions, rewards, next_states, dones = self.buffer.sample(self.cfg.batch_size)
+        states = torch.tensor(states, dtype=torch.float32, device=self.device)
+        actions = torch.tensor(actions, dtype=torch.int64, device=self.device).unsqueeze(-1)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device).unsqueeze(-1)
+        next_states = torch.tensor(next_states, dtype=torch.float32, device=self.device)
+        dones = torch.tensor(dones, dtype=torch.float32, device=self.device).unsqueeze(-1)
+
+        q = self.q_net(states).gather(1, actions)
+        with torch.no_grad():
+            max_next = self.target_net(next_states).max(dim=1, keepdim=True)[0]
+            target = rewards + self.gamma * (1 - dones) * max_next
+        loss = F.mse_loss(q, target)
+
+        self.optim.zero_grad()
+        loss.backward()
+        self.optim.step()
+
+        self.step_count += 1
+        if self.step_count % self.target_update == 0:
+            self.target_net.load_state_dict(self.q_net.state_dict())
+        return float(loss.item())
+
+    # --------- Persistence ---------
+    def save(self, path: str | None = None) -> None:
+        path = path or self.model_path
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(self.q_net.state_dict(), path)
+
+    def load(self, path: str | None = None) -> None:
+        path = path or self.model_path
+        if os.path.exists(path):
+            self.q_net.load_state_dict(torch.load(path, map_location=self.device))
+            self.target_net.load_state_dict(self.q_net.state_dict())

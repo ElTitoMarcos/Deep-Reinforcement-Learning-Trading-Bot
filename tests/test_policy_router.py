@@ -1,5 +1,5 @@
 from src.policies.router import get_policy
-from src.policies.value_based import TinyDQN
+from src.policies.value_based import ValueBasedPolicy
 from src.policies.deterministic import DeterministicPolicy
 from src.policies.stochastic import StochasticPolicy
 
@@ -9,4 +9,4 @@ def test_router():
     val = get_policy("dqn")
     assert isinstance(det, DeterministicPolicy)
     assert isinstance(sto, StochasticPolicy)
-    assert isinstance(val, TinyDQN)
+    assert isinstance(val, ValueBasedPolicy)

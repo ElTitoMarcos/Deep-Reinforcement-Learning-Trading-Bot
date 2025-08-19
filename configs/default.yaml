@@ -28,6 +28,7 @@ dqn:
   learning_rate: 1.0e-3
   gamma: 0.99
   batch_size: 64
+  buffer_size: 10000
   target_update: 1000
   epsilon_start: 1.0
   epsilon_end: 0.05
@@ -36,9 +37,25 @@ dqn:
 # Reward heads
 reward_weights:
   pnl: 1.0
-  turnover_penalty: 0.1
-  drawdown_penalty: 0.2
-  volatility_penalty: 0.1
+  turn: 0.1
+  dd: 0.2
+  vol: 0.1
+
+# Deterministic policy params
+deterministic_policy:
+  base_threshold: 0.001   # required 5-tick log-return to enter
+  bounce_coef: 0.5        # sensitivity of threshold to prior drawdown
+  trailing_pct: 0.01      # exit when price falls this fraction from peak
+  cooldown_ticks: 5       # min ticks between consecutive trades
+
+# Stochastic policy params
+stochastic_policy:
+  base_threshold: 0.001   # same semantics as deterministic
+  bounce_coef: 0.5
+  trailing_pct: 0.01
+  temperature: 0.1        # softmax temperature tau
+  noise_std: 0.0001       # std-dev of Gaussian noise on thresholds
+  seed: 42
 
 # Paths
 paths:
@@ -47,3 +64,4 @@ paths:
   logs_dir: "logs"
   reports_dir: "reports"
   checkpoints_dir: "checkpoints"
+  models_dir: "models"
