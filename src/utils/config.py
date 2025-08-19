@@ -22,6 +22,10 @@ def load_config(path: str, overrides: Dict[str, Any] | None = None) -> Dict[str,
         if v is not None:
             cfg.setdefault("env", {})[k] = v
 
+    use_testnet = os.getenv("BINANCE_USE_TESTNET")
+    if use_testnet is not None:
+        cfg["binance_use_testnet"] = use_testnet.lower() in ("1", "true", "yes")
+
     # Apply explicit overrides (e.g., CLI flags)
     if overrides:
         for k, v in overrides.items():
