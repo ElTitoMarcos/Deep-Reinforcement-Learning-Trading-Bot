@@ -27,6 +27,7 @@ import numpy as np
 import pandas as pd
 
 from ..env.trading_env import TradingEnv
+from ..auto.hparam_tuner import tune
 from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger, config_hash
@@ -313,20 +314,44 @@ def main() -> None:
     if args.algo_reason:
         logger.log("INFO", "auto_algo", algo=args.algo, reason=args.algo_reason)
 
+    algo_key = args.algo.lower()
+    data_stats = {
+        "obs_dim": int(env.observation_space.shape[0]),
+        "n_actions": int(env.action_space.n),
+        "timesteps": args.timesteps,
+    }
+    tuned = tune(algo_key if algo_key in {"ppo", "dqn", "hybrid"} else "dqn", data_stats, [])
+    if algo_key == "hybrid":
+        ppo_params = {**tuned.get("ppo", {}), **cfg.get("ppo", {})}
+        dqn_params = {**tuned.get("dqn", {}), **cfg.get("dqn", {})}
+        cfg["ppo"] = ppo_params
+        cfg["dqn"] = dqn_params
+        logger.log("INFO", "hparams", algo="ppo", params=ppo_params)
+        logger.log("INFO", "hparams", algo="dqn", params=dqn_params)
+    elif algo_key == "ppo":
+        params = {**tuned, **cfg.get("ppo", {})}
+        cfg["ppo"] = params
+        logger.log("INFO", "hparams", algo="ppo", params=params)
+    else:  # dqn or other value-based variants
+        params = {**tuned, **cfg.get("dqn", {})}
+        cfg["dqn"] = params
+        logger.log("INFO", "hparams", algo="dqn", params=params)
+
     ckpt_dir = str(get_checkpoints_dir(cfg))
-    if args.algo.lower() == "dqn":
+    if algo_key == "dqn":
         out = train_value_dqn(
             env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
         )
-    elif args.algo.lower() == "tiny":
+    elif algo_key == "tiny":
         out = train_dqn(
             env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
         )
-    elif args.algo.lower() == "ppo":
+    elif algo_key == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
         out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
-    elif args.algo.lower() == "hybrid":
+    elif algo_key == "hybrid":
+
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
         ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)

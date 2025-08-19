@@ -9,6 +9,7 @@ from src.data.symbol_discovery import discover_symbols
 from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
 from src.auto.strategy_selector import choose_algo
+from src.auto.hparam_tuner import tune
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
@@ -120,26 +121,89 @@ with st.sidebar:
     algo = choice["algo"]
     cfg["algo"] = algo
     st.success(f"Algoritmo elegido: {algo} — {choice['reason']}")
-    ppo = cfg.get("ppo", {})
-    dqn = cfg.get("dqn", {})
-
-    with st.expander("Hiperparámetros PPO"):
-        ppo_lr = st.number_input("learning_rate", value=float(ppo.get("learning_rate",3e-4)), format="%.8f")
-        ppo_steps = st.number_input("n_steps", value=int(ppo.get("n_steps",2048)))
-        ppo_batch = st.number_input("batch_size", value=int(ppo.get("batch_size",64)))
-        ppo_gamma = st.number_input("gamma", value=float(ppo.get("gamma",0.99)))
-        ppo_lambda = st.number_input("gae_lambda", value=float(ppo.get("gae_lambda",0.95)))
-        ppo_clip = st.number_input("clip_range", value=float(ppo.get("clip_range",0.2)))
-        ppo_ent = st.number_input("ent_coef", value=float(ppo.get("ent_coef",0.01)))
-
-    with st.expander("Hiperparámetros DQN"):
-        dqn_lr = st.number_input("learning_rate ", value=float(dqn.get("learning_rate",1e-3)), format="%.8f")
-        dqn_gamma = st.number_input("gamma ", value=float(dqn.get("gamma",0.99)))
-        dqn_batch = st.number_input("batch_size ", value=int(dqn.get("batch_size",64)))
-        dqn_target = st.number_input("target_update ", value=int(dqn.get("target_update",1000)))
-        dqn_eps_s = st.number_input("epsilon_start", value=float(dqn.get("epsilon_start",1.0)))
-        dqn_eps_e = st.number_input("epsilon_end", value=float(dqn.get("epsilon_end",0.05)))
-        dqn_eps_d = st.number_input("epsilon_decay_steps", value=int(dqn.get("epsilon_decay_steps",10000)))
+    suggested = tune(algo, stats, [])
+    if algo == "hybrid":
+        ppo_sug = suggested.get("ppo", {})
+        dqn_sug = suggested.get("dqn", {})
+        st.subheader("Hiperparámetros críticos PPO")
+        ppo_lr = st.number_input(
+            "Velocidad de aprendizaje (qué tan rápido aprende)",
+            value=float(ppo_sug.get("learning_rate", 3e-4)),
+            format="%.6f",
+            help=f"Sugerido {ppo_sug.get('learning_rate',3e-4):.2e}",
+            key="ppo_lr",
+        )
+        ppo_batch = st.number_input(
+            "Tamaño de lote (cada cuántos ejemplos actualiza)",
+            value=int(ppo_sug.get("batch_size", 64)),
+            help=f"Sugerido {ppo_sug.get('batch_size',64)}",
+            key="ppo_batch",
+        )
+        ppo_steps = st.number_input(
+            "Horizonte de actualización (pasos antes de actualizar)",
+            value=int(ppo_sug.get("n_steps", 2048)),
+            help=f"Sugerido {ppo_sug.get('n_steps',2048)}",
+            key="ppo_steps",
+        )
+        st.subheader("Hiperparámetros críticos DQN")
+        dqn_lr = st.number_input(
+            "Velocidad de aprendizaje (qué tan rápido aprende) [DQN]",
+            value=float(dqn_sug.get("learning_rate", 1e-3)),
+            format="%.6f",
+            help=f"Sugerido {dqn_sug.get('learning_rate',1e-3):.2e}",
+            key="dqn_lr",
+        )
+        dqn_batch = st.number_input(
+            "Tamaño de lote (cada cuántos ejemplos actualiza) [DQN]",
+            value=int(dqn_sug.get("batch_size", 64)),
+            help=f"Sugerido {dqn_sug.get('batch_size',64)}",
+            key="dqn_batch",
+        )
+        dqn_steps = st.number_input(
+            "Horizonte de actualización (pasos antes de actualizar) [DQN]",
+            value=int(dqn_sug.get("n_steps", 1000)),
+            help=f"Sugerido {dqn_sug.get('n_steps',1000)}",
+            key="dqn_steps",
+        )
+        cfg["ppo"] = {
+            "learning_rate": ppo_lr,
+            "batch_size": int(ppo_batch),
+            "n_steps": int(ppo_steps),
+        }
+        cfg["dqn"] = {
+            "learning_rate": dqn_lr,
+            "batch_size": int(dqn_batch),
+            "target_update": int(dqn_steps),
+        }
+    else:
+        lr = st.number_input(
+            "Velocidad de aprendizaje (qué tan rápido aprende)",
+            value=float(suggested.get("learning_rate", 3e-4)),
+            format="%.6f",
+            help=f"Sugerido {suggested.get('learning_rate',3e-4):.2e}",
+        )
+        batch = st.number_input(
+            "Tamaño de lote (cada cuántos ejemplos actualiza)",
+            value=int(suggested.get("batch_size", 64)),
+            help=f"Sugerido {suggested.get('batch_size',64)}",
+        )
+        horizon = st.number_input(
+            "Horizonte de actualización (pasos antes de actualizar)",
+            value=int(suggested.get("n_steps", 2048)),
+            help=f"Sugerido {suggested.get('n_steps',2048)}",
+        )
+        if algo == "ppo":
+            cfg["ppo"] = {
+                "learning_rate": lr,
+                "batch_size": int(batch),
+                "n_steps": int(horizon),
+            }
+        else:
+            cfg["dqn"] = {
+                "learning_rate": lr,
+                "batch_size": int(batch),
+                "target_update": int(horizon),
+            }
 
     if st.button("💾 Guardar config YAML"):
         import yaml
@@ -153,15 +217,8 @@ with st.sidebar:
             "min_notional_usd": min_notional,
             "filters": {"tickSize": tick_size, "stepSize": step_size},
             "algo": algo,
-            "ppo": {
-                "learning_rate": ppo_lr, "n_steps": int(ppo_steps), "batch_size": int(ppo_batch),
-                "gamma": ppo_gamma, "gae_lambda": ppo_lambda, "clip_range": ppo_clip, "ent_coef": ppo_ent
-            },
-            "dqn": {
-                "learning_rate": dqn_lr, "gamma": dqn_gamma, "batch_size": int(dqn_batch),
-                "target_update": int(dqn_target), "epsilon_start": dqn_eps_s,
-                "epsilon_end": dqn_eps_e, "epsilon_decay_steps": int(dqn_eps_d)
-            },
+            "ppo": cfg.get("ppo", {}),
+            "dqn": cfg.get("dqn", {}),
             "reward_weights": {
                 "pnl": beneficio,
                 "turn": control_act,
