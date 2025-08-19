@@ -31,6 +31,10 @@ st.set_page_config(page_title="DRL Trading Config", layout="wide")
 
 st.title("⚙️ Configuración DRL Trading")
 
+for k, v in {"fee_maker": None, "fee_taker": None}.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
 device = get_device()
 if device == "cuda":
     import torch
@@ -82,25 +86,52 @@ with st.sidebar:
     cfg["symbols"] = selected_symbols
 
     fees_dict = cfg.get("fees", {})
-    fees_maker = st.number_input("Fee maker", value=float(fees_dict.get("maker",0.001)), step=0.0001, format="%.6f", key="fee_maker")
-    fees_taker = st.number_input("Fee taker", value=float(fees_dict.get("taker",0.001)), step=0.0001, format="%.6f", key="fee_taker")
-    if st.button("Actualizar comisiones"):
-        load_dotenv()
-        api_key = os.getenv("BINANCE_API_KEY")
-        api_secret = os.getenv("BINANCE_API_SECRET")
-        try:
-            meta = BinanceMeta(api_key, api_secret, use_testnet)
-            fee_map = meta.get_account_trade_fees()
-            symbol_key = (selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map)))
-            entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
-            st.session_state["fee_maker"] = entry.get("maker", fees_maker)
-            st.session_state["fee_taker"] = entry.get("taker", fees_taker)
-            st.success(f"Maker {entry.get('maker',0)} | Taker {entry.get('taker',0)}")
-        except Exception as e:
-            st.error(f"No se pudo obtener: {e}")
-    fees_maker = st.session_state.get("fee_maker", fees_maker)
-    fees_taker = st.session_state.get("fee_taker", fees_taker)
-    cfg["fees"] = {"maker": fees_maker, "taker": fees_taker}
+    current_fee_maker = st.session_state["fee_maker"] or float(fees_dict.get("maker", 0.001))
+    current_fee_taker = st.session_state["fee_taker"] or float(fees_dict.get("taker", 0.001))
+    st.number_input(
+        "Fee maker",
+        value=float(current_fee_maker),
+        step=0.0001,
+        format="%.6f",
+        key="fee_maker",
+    )
+    st.number_input(
+        "Fee taker",
+        value=float(current_fee_taker),
+        step=0.0001,
+        format="%.6f",
+        key="fee_taker",
+    )
+    btn_col, origin_col = st.columns([1, 1])
+    with btn_col:
+        if st.button("Actualizar comisiones"):
+            load_dotenv()
+            api_key = os.getenv("BINANCE_API_KEY")
+            api_secret = os.getenv("BINANCE_API_SECRET")
+            try:
+                meta = BinanceMeta(api_key, api_secret, use_testnet)
+                fee_map = meta.get_account_trade_fees()
+                symbol_key = (
+                    selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map))
+                )
+                entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
+                st.session_state["fee_maker"] = entry.get("maker", current_fee_maker)
+                st.session_state["fee_taker"] = entry.get("taker", current_fee_taker)
+                st.session_state["fee_origin"] = meta.last_fee_origin
+                st.success(
+                    f"Maker {entry.get('maker',0)} | Taker {entry.get('taker',0)}"
+                )
+                st.experimental_rerun()
+            except Exception as e:
+                st.error(f"No se pudo obtener: {e}")
+    with origin_col:
+        origin = st.session_state.get("fee_origin")
+        if origin:
+            st.caption(origin)
+    cfg["fees"] = {
+        "maker": st.session_state["fee_maker"] or current_fee_maker,
+        "taker": st.session_state["fee_taker"] or current_fee_taker,
+    }
     slippage_mult = st.number_input(
         "Multiplicador slippage",
         value=float(cfg.get("slippage_multiplier", 1.0)),
