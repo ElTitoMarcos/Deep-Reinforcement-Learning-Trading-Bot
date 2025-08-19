@@ -31,7 +31,6 @@ with st.sidebar:
     mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
     use_testnet = mode == "Testnet"
     os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
-
     st.caption("Símbolos sugeridos (auto)")
     refresh_syms = st.button("Actualizar", key="refresh_syms")
     if "symbol_checks" not in st.session_state or refresh_syms:
