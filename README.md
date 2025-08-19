@@ -97,11 +97,29 @@ python -m src.backtest.evaluate --config configs/default.yaml --policy determini
 
 Resultados en `reports/` + métricas en consola.
 
+## Experimento completo
+
+```bash
+python scripts/run_experiment.py --config configs/default.yaml --seed 1 --algo dqn --timesteps 1000 --data-mode price_only
+```
+
+Descarga datos si faltan, entrena y ejecuta un backtest con reporte en `reports/{exp_id}/`.
+
 ## Tests (smoke)
 
 ```bash
 pytest -q
 ```
+
+## Troubleshooting: rate limits/timeouts
+
+- **Descarga lenta o errores `RateLimitExceeded`**: incrementa `--rate-limit` y `--retries`.
+
+```bash
+python scripts/download_history.py --exchange binance --symbols BTC/USDT --timeframe 1m --rate-limit 2 --retries 10
+```
+
+- **`RequestTimeout` en el exchange**: reintenta tras unos segundos; `ccxt` aplica *backoff* exponencial.
 
 ## Notas
 
