@@ -6,7 +6,8 @@ from src.utils.config import load_config
 from src.utils.paths import ensure_dirs_exist, get_raw_dir, get_reports_dir
 from src.reports.human_friendly import render_panel
 from src.utils.device import get_device, set_cpu_threads
-from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
+from src.data.ccxt_loader import get_exchange, save_history
+from src.data.ensure import ensure_ohlcv
 from src.data.volatility_windows import find_high_activity_windows
 from src.data.symbol_discovery import discover_symbols
 from src.data import (
@@ -387,29 +388,43 @@ if st.button("⬇️ Descargar histórico"):
         tf_str = cfg.get("timeframe", "1m")
         timeframe_min = int(tf_str.rstrip("m"))
         st.info("Construyendo dataset con tramos de alta actividad...")
-        windows = find_high_activity_windows(selected_symbols, timeframe_min)
+        windows, lookback_h = find_high_activity_windows(
+            selected_symbols, timeframe_min
+        )
         if windows:
             st.write("Ventanas ejemplo:")
             for s, e in windows[:5]:
-                st.write(f"{datetime.fromtimestamp(s/1000, UTC)} → {datetime.fromtimestamp(e/1000, UTC)}")
-        ex = get_exchange(use_testnet=use_testnet)
-        for sym in selected_symbols:
-            parts = []
-            for s, e in windows:
-                limit = int((e - s) / (timeframe_min * 60 * 1000))
-                try:
-                    df = fetch_ohlcv(ex, sym, timeframe=tf_str, since=s, limit=limit)
-                    parts.append(df)
-                except Exception as err:
-                    st.warning(f"Fallo {sym}: {err}")
-            if parts:
-                merged = pd.concat(parts)
-                tf = merged.attrs.get("timeframe", tf_str)
-                cfg["timeframe"] = tf
-                path = save_history(merged, str(raw_dir), "binance", sym, tf)
-                st.success(f"Guardado: {path}")
+                st.write(
+                    f"{datetime.fromtimestamp(s/1000, UTC)} → {datetime.fromtimestamp(e/1000, UTC)}"
+                )
         total_hours = sum((e - s) // 3600000 for s, e in windows)
         st.info(f"Ventanas total: {total_hours}h")
+        ex = get_exchange(use_testnet=use_testnet)
+        for sym in selected_symbols:
+            try:
+                path = ensure_ohlcv(
+                    ex.id if hasattr(ex, "id") else "binance",
+                    sym,
+                    tf_str,
+                    hours=lookback_h,
+                    root=raw_dir,
+                )
+                df = pd.read_parquet(path)
+                parts = [df[(df.ts >= s) & (df.ts < e)] for s, e in windows]
+                if parts:
+                    merged = pd.concat(parts)
+                    tf = tf_str
+                    cfg["timeframe"] = tf
+                    out = save_history(
+                        merged,
+                        str(raw_dir),
+                        ex.id if hasattr(ex, "id") else "binance",
+                        sym,
+                        tf,
+                    )
+                    st.success(f"Guardado: {out}")
+            except Exception as err:
+                st.warning(f"Fallo {sym}: {err}")
     except Exception as e:
         st.error(f"Error en descarga: {e}")
 
