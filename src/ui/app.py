@@ -1,5 +1,5 @@
 import os, io, sys, json, subprocess, time
-from datetime import datetime
+from datetime import datetime, UTC
 import streamlit as st
 
 from src.utils.config import load_config
@@ -369,7 +369,7 @@ if st.button("⬇️ Descargar histórico"):
         if windows:
             st.write("Ventanas ejemplo:")
             for s, e in windows[:5]:
-                st.write(f"{datetime.utcfromtimestamp(s/1000)} → {datetime.utcfromtimestamp(e/1000)}")
+                st.write(f"{datetime.fromtimestamp(s/1000, UTC)} → {datetime.fromtimestamp(e/1000, UTC)}")
         ex = get_exchange(use_testnet=use_testnet)
         for sym in selected_symbols:
             parts = []
