@@ -287,7 +287,8 @@ def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str) -> st
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train tiny DRL agents")
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--algo", default="dqn", help="dqn|tiny|ppo")
+    parser.add_argument("--algo", default="dqn", help="dqn|tiny|ppo|hybrid")
+    parser.add_argument("--algo-reason", default="", help="Descripción breve de la elección automática")
     parser.add_argument("--timesteps", type=int, default=10_000)
     parser.add_argument("--data", type=str, default=None, help="Optional path to CSV/Parquet data")
     parser.add_argument("--checkpoint-freq", type=int, default=10)
@@ -303,17 +304,36 @@ def main() -> None:
     logs_dir = paths.get("logs_dir", "logs")
     os.makedirs(logs_dir, exist_ok=True)
     logger = ensure_logger(os.path.join(logs_dir, "train.jsonl"))
-    logger.log("INFO", "env_ready", obs_dim=int(env.observation_space.shape[0]), actions=int(env.action_space.n))
+    logger.log(
+        "INFO",
+        "env_ready",
+        obs_dim=int(env.observation_space.shape[0]),
+        actions=int(env.action_space.n),
+    )
+    if args.algo_reason:
+        logger.log("INFO", "auto_algo", algo=args.algo, reason=args.algo_reason)
 
     ckpt_dir = str(get_checkpoints_dir(cfg))
     if args.algo.lower() == "dqn":
-        out = train_value_dqn(env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq)
+        out = train_value_dqn(
+            env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
+        )
     elif args.algo.lower() == "tiny":
-        out = train_dqn(env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq)
+        out = train_dqn(
+            env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
+        )
     elif args.algo.lower() == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
         out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
+    elif args.algo.lower() == "hybrid":
+        if not has_sb3():  # pragma: no cover - optional dependency
+            raise RuntimeError("stable-baselines3 is required for PPO training")
+        ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
+        dqn_path = train_value_dqn(
+            env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
+        )
+        out = json.dumps({"ppo": ppo_path, "dqn": dqn_path})
     else:  # pragma: no cover
         raise ValueError(f"Unknown algorithm: {args.algo}")
 
