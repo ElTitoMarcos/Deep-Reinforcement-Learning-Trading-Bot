@@ -17,6 +17,25 @@ class JsonLogger:
         else:
             print(line, file=sys.stdout)
 
+    # convenience wrappers -------------------------------------------------
+
+    def info(self, msg: str, **kwargs: Any):
+        self.log("info", msg, **kwargs)
+
+    def warning(self, msg: str, **kwargs: Any):
+        self.log("warning", msg, **kwargs)
+
+    def error(self, msg: str, **kwargs: Any):
+        self.log("error", msg, **kwargs)
+
+    # context manager support ----------------------------------------------
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
     def close(self):
         if self.fp:
             self.fp.close()
