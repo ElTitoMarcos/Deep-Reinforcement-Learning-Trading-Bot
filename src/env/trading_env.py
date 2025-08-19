@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Tuple, Dict, Any, List, Callable
+from collections import deque
 
 import numpy as np
 import pandas as pd
@@ -40,6 +41,10 @@ class TradingEnv:
         self,
         df: pd.DataFrame,
         orderbook_hook: Callable[[int], Dict[str, Any]] | None = None,
+        *,
+        max_trades_per_window: int | None = None,
+        trade_window_seconds: float = 0.0,
+        trade_cooldown_seconds: float = 0.0,
     ):
         self.df = df.reset_index(drop=True)
         self.current_step = 0
@@ -76,6 +81,14 @@ class TradingEnv:
         self.w_turn = float(rw.get("turn", 0.0))
         self.w_dd = float(rw.get("dd", 0.0))
         self.w_vol = float(rw.get("vol", 0.0))
+
+        # environment timing and trade limits ----------------------------
+        self.step_seconds = float(cfg.get("step_seconds", 60))
+        self.max_trades_per_window = max_trades_per_window
+        self.trade_window_seconds = float(trade_window_seconds)
+        self.trade_cooldown_seconds = float(trade_cooldown_seconds)
+        self._trade_times: deque[float] = deque()
+        self._last_trade_time: float | None = None
 
     # ------------------------------------------------------------------
     def _make_observation(self, step: int) -> np.ndarray:
@@ -177,6 +190,8 @@ class TradingEnv:
         self.equity = 0.0
         self.equity_peak = 0.0
         self._feature_histories = [[] for _ in range(8)]
+        self._trade_times.clear()
+        self._last_trade_time = None
         obs = self._make_observation(self.current_step)
         return obs, {}
 
@@ -185,23 +200,57 @@ class TradingEnv:
         prev_equity = self.equity
         prev_drawdown = self.equity_peak - self.equity
         trade = False
+        attempted_trade = False
+
+        now = self.current_step * self.step_seconds
+
+        def can_trade() -> bool:
+            if self.trade_cooldown_seconds > 0 and self._last_trade_time is not None:
+                if now - self._last_trade_time < self.trade_cooldown_seconds:
+                    logger.info(
+                        "Trade blocked: cooldown %.1fs", self.trade_cooldown_seconds - (now - self._last_trade_time)
+                    )
+                    return False
+            if (
+                self.max_trades_per_window is not None
+                and self.trade_window_seconds > 0
+            ):
+                while self._trade_times and now - self._trade_times[0] >= self.trade_window_seconds:
+                    self._trade_times.popleft()
+                if len(self._trade_times) >= self.max_trades_per_window:
+                    logger.info(
+                        "Trade blocked: max %s trades in %ss window",
+                        self.max_trades_per_window,
+                        self.trade_window_seconds,
+                    )
+                    return False
+            return True
 
         # action: 0=hold, 1=open_long, 2=close
-        if action == 1 and not self.in_position:  # open long
-            self.in_position = True
-            self.trailing_stop = prev_price
-            self.entry_price = prev_price
-            fee = prev_price * self.fee_rate
-            self.equity -= fee
-            trade = True
-        elif action == 2 and self.in_position:  # close position
-            fee = prev_price * self.fee_rate
-            self.equity += (prev_price - self.entry_price) - fee
-            self.in_position = False
-            self.trailing_stop = None
-            self.entry_price = None
-            trade = True
-            
+        if action == 1 and not self.in_position:
+            attempted_trade = True
+            if can_trade():
+                self.in_position = True
+                self.trailing_stop = prev_price
+                self.entry_price = prev_price
+                fee = prev_price * self.fee_rate
+                self.equity -= fee
+                trade = True
+        elif action == 2 and self.in_position:
+            attempted_trade = True
+            if can_trade():
+                fee = prev_price * self.fee_rate
+                self.equity += (prev_price - self.entry_price) - fee
+                self.in_position = False
+                self.trailing_stop = None
+                self.entry_price = None
+                trade = True
+
+        if trade:
+            self._last_trade_time = now
+            if self.max_trades_per_window is not None:
+                self._trade_times.append(now)
+
         # TODO: support a continuous size component (0..1) alongside the
         # discrete action for finer trade management
 
@@ -219,7 +268,9 @@ class TradingEnv:
         self.equity_peak = max(self.equity_peak, self.equity)
         new_drawdown = self.equity_peak - self.equity
         dd_step = max(0.0, new_drawdown - prev_drawdown)
-        trades_step = 1.0 if trade else 0.0
+        trades_step = 1.0 if attempted_trade else 0.0
+        if attempted_trade and not trade:
+            trades_step += 1.0
 
         start_idx = max(1, self.current_step - 4)
         window_returns = np.diff(np.log(self._close[start_idx: self.current_step + 1]))

@@ -1,5 +1,6 @@
 from __future__ import annotations
 from typing import Dict, Any, Tuple
+from collections import deque
 
 import numpy as np
 
@@ -15,17 +16,39 @@ class DeterministicPolicy:
         base_threshold: float = 0.001,
         bounce_coef: float = 0.5,
         trailing_pct: float = 0.01,
-        cooldown_ticks: int = 5,
+        cooldown_seconds: float | None = None,
+        cooldown_ticks: int | None = 5,
+        max_trades: int | None = None,
+        window_seconds: float | None = None,
+        step_seconds: float = 60.0,
         threshold: float | None = None,
     ) -> None:
-        # ``threshold`` kept for backwards compatibility with older configs
+        """Create policy instance.
+
+        ``threshold`` and ``cooldown_ticks`` kept for backwards compatibility.
+        ``cooldown_seconds`` takes precedence over ``cooldown_ticks`` if both are
+        provided.
+        """
+
         if threshold is not None:
             base_threshold = threshold
 
         self.base_threshold = float(base_threshold)
         self.bounce_coef = float(bounce_coef)
         self.trailing_pct = float(trailing_pct)
-        self.cooldown_ticks = int(cooldown_ticks)
+        self.step_seconds = float(step_seconds)
+
+        if cooldown_seconds is not None:
+            self.cooldown_ticks = int(np.ceil(cooldown_seconds / self.step_seconds))
+        else:
+            self.cooldown_ticks = int(cooldown_ticks or 0)
+
+        self.max_trades = int(max_trades) if max_trades is not None else None
+        if self.max_trades is not None and window_seconds is not None:
+            self.window_ticks = int(np.ceil(window_seconds / self.step_seconds))
+        else:
+            self.window_ticks = None
+        self._trade_ticks = deque()
 
         self.last_trade_tick = -np.inf  # enforce cooldown
         self.tick = 0
@@ -51,15 +74,26 @@ class DeterministicPolicy:
         # dynamic entry threshold: bigger prior drop → smaller required rise
         dyn_threshold = max(0.0, self.base_threshold - self.bounce_coef * drawdown)
 
-        can_trade = (self.tick - self.last_trade_tick) >= self.cooldown_ticks
+        def window_ok() -> bool:
+            if self.max_trades is None or self.window_ticks is None:
+                return True
+            while self._trade_ticks and (self.tick - self._trade_ticks[0]) >= self.window_ticks:
+                self._trade_ticks.popleft()
+            return len(self._trade_ticks) < self.max_trades
+
+        can_trade = (self.tick - self.last_trade_tick) >= self.cooldown_ticks and window_ok()
         action = 0  # default hold
 
         if not in_pos and can_trade and ret_5 > dyn_threshold:
             action = 1  # open long
             self.last_trade_tick = self.tick
-        elif in_pos and trailing_norm <= -self.trailing_pct:
+            if self.max_trades is not None and self.window_ticks is not None:
+                self._trade_ticks.append(self.tick)
+        elif in_pos and can_trade and trailing_norm <= -self.trailing_pct:
             action = 2  # close position
             self.last_trade_tick = self.tick
+            if self.max_trades is not None and self.window_ticks is not None:
+                self._trade_ticks.append(self.tick)
 
         trace: Dict[str, Any] = {
             "ret_5": ret_5,

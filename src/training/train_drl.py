@@ -29,6 +29,7 @@ from ..env.trading_env import TradingEnv
 from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger
+from ..policies.value_based import ValueBasedPolicy
 
 
 # ---------------------------------------------------------------------------
@@ -141,6 +142,45 @@ def quick_eval(env: TradingEnv, agent: TinyDQN) -> float:
     return float(eval_env.equity)
 
 
+def train_value_dqn(
+    env: TradingEnv,
+    cfg: dict,
+    timesteps: int,
+    *,
+    outdir: str = "checkpoints",
+    checkpoint_freq: int = 10,
+) -> str:
+    """Train the PyTorch value-based policy with the flexible MLP network."""
+
+    dqn_cfg = cfg.get("dqn", {})
+    obs_dim = int(env.observation_space.shape[0])
+    n_actions = int(env.action_space.n)
+    agent = ValueBasedPolicy(obs_dim, n_actions, config=dqn_cfg)
+
+    total_steps = 0
+    episode = 0
+    os.makedirs(outdir, exist_ok=True)
+    while total_steps < timesteps:
+        obs, _ = env.reset()
+        done = False
+        episode += 1
+        while not done and total_steps < timesteps:
+            action = agent.act(obs)
+            next_obs, reward, done, trunc, _info = env.step(action)
+            agent.remember(obs, action, reward, next_obs, done or trunc)
+            agent.train_step()
+            obs = next_obs
+            total_steps += 1
+
+        if checkpoint_freq and episode % checkpoint_freq == 0:
+            ckpt = os.path.join(outdir, f"vdqn_ep{episode}.pt")
+            agent.save(ckpt)
+
+    final_path = os.path.join(outdir, "vdqn_final.pt")
+    agent.save(final_path)
+    return final_path
+
+
 def train_dqn(
     env: TradingEnv,
     cfg: dict,
@@ -221,7 +261,7 @@ def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str) -> st
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train tiny DRL agents")
     parser.add_argument("--config", default="configs/default.yaml")
-    parser.add_argument("--algo", default="dqn", help="dqn|ppo")
+    parser.add_argument("--algo", default="dqn", help="dqn|tiny|ppo")
     parser.add_argument("--timesteps", type=int, default=10_000)
     parser.add_argument("--data", type=str, default=None, help="Optional path to CSV/Parquet data")
     parser.add_argument("--checkpoint-freq", type=int, default=10)
@@ -238,6 +278,8 @@ def main() -> None:
     logger.log("INFO", "env_ready", obs_dim=int(env.observation_space.shape[0]), actions=int(env.action_space.n))
 
     if args.algo.lower() == "dqn":
+        out = train_value_dqn(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"), checkpoint_freq=args.checkpoint_freq)
+    elif args.algo.lower() == "tiny":
         out = train_dqn(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"), checkpoint_freq=args.checkpoint_freq)
     elif args.algo.lower() == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
