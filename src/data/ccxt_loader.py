@@ -7,7 +7,17 @@ lightweight to avoid heavy dependencies during testing.
 
 from __future__ import annotations
 
+import os
+from typing import Any, Optional
+
 import pandas as pd
+
+__all__ = [
+    "simulate_1s_from_1m",
+    "get_exchange",
+    "fetch_ohlcv",
+    "save_history",
+]
 
 
 def simulate_1s_from_1m(df_1m: pd.DataFrame) -> pd.DataFrame:
@@ -45,4 +55,55 @@ def simulate_1s_from_1m(df_1m: pd.DataFrame) -> pd.DataFrame:
             )
 
     return pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
+
+
+def get_exchange(name: str):
+    """Instantiate a ``ccxt`` exchange by *name*.
+
+    The library is imported lazily so environments without ``ccxt`` can still
+    import this module for testing purposes.  An informative ``ImportError`` is
+    raised if the dependency is missing when the function is used.
+    """
+
+    try:  # pragma: no cover - exercised only when ccxt is available
+        import ccxt  # type: ignore
+    except Exception as exc:  # pragma: no cover - missing optional dep
+        raise ImportError("ccxt is required to create exchange clients") from exc
+
+    try:
+        cls = getattr(ccxt, name)
+    except AttributeError as exc:
+        raise ValueError(f"unknown exchange: {name}") from exc
+
+    ex = cls()
+    try:
+        ex.load_markets()
+    except Exception:  # pragma: no cover - network/ccxt quirks
+        pass
+    return ex
+
+
+def fetch_ohlcv(
+    exchange: Any,
+    symbol: str,
+    timeframe: str = "1m",
+    since: Optional[int] = None,
+    limit: int = 1000,
+) -> pd.DataFrame:
+    """Fetch OHLCV data from *exchange* and return a DataFrame."""
+
+    data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
+    return pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "volume"])
+
+
+def save_history(
+    df: pd.DataFrame, root_dir: str, exchange: str, symbol: str, timeframe: str
+) -> str:
+    """Persist OHLCV *df* as CSV and return the output path."""
+
+    os.makedirs(root_dir, exist_ok=True)
+    fname = f"{exchange}_{symbol.replace('/', '-')}_{timeframe}.csv"
+    path = os.path.join(root_dir, fname)
+    df.to_csv(path, index=False)
+    return path
 
