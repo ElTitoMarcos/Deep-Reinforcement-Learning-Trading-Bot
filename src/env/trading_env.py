@@ -21,6 +21,13 @@ class _Space:
     shape: Tuple[int, ...]
     dtype: Any = np.float32
 
+@dataclass
+class _Discrete:
+    """Minimal discrete space (``n`` possible integer actions)."""
+
+    n: int
+    dtype: Any = np.int64
+
 
 class TradingEnv:
     def __init__(self, df: pd.DataFrame):
@@ -41,6 +48,10 @@ class TradingEnv:
 
         # observation space: 8 engineered features, float32
         self.observation_space = _Space((8,), np.float32)
+        # discrete action space: 0=hold, 1=open_long, 2=close
+        self.action_space = _Discrete(3, np.int64)
+        # in the future this could include a continuous component (0..1)
+        # to express position sizing alongside the discrete action
 
     # ------------------------------------------------------------------
     def _make_observation(self, step: int) -> np.ndarray:
@@ -134,13 +145,15 @@ class TradingEnv:
     def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
         prev_price = self._close[self.current_step]
 
-        # basic position management (very minimal)
-        if action == 1:  # enter/long
+        # action: 0=hold, 1=open_long, 2=close
+        if action == 1 and not self.in_position:  # open long
             self.in_position = True
             self.trailing_stop = prev_price
-        elif action == 2:  # exit
+        elif action == 2 and self.in_position:  # close position
             self.in_position = False
             self.trailing_stop = None
+        # TODO: support a continuous size component (0..1) alongside the
+        # discrete action for finer trade management
 
         self.current_step += 1
         self.current_step = min(self.current_step, len(self._close) - 1)
