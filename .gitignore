@@ -55,6 +55,8 @@ reports/
 !src/data/universe/liquid_universe.csv
 !src/env/
 !src/env/**
+!src/reports/
+!src/reports/**
 
 # OS files
 .DS_Store

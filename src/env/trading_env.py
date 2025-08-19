@@ -131,22 +131,6 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
             except Exception:  # pragma: no cover - network issues
                 pass
 
-        self.meta = meta
-        self.symbol = symbol
-        f_cfg = cfg.get("filters", {})
-        self._tick_size = float(f_cfg.get("tickSize", 0.0))
-        self._step_size = float(f_cfg.get("stepSize", 1.0))
-        self._min_notional = float(cfg.get("min_notional_usd", 0.0))
-        self.position_size = 0.0
-        if self.meta and self.symbol:
-            try:
-                filt = self.meta.get_symbol_filters(self.symbol)
-                self._tick_size = float(filt.get("tickSize", self._tick_size))
-                self._step_size = float(filt.get("stepSize", self._step_size))
-                self._min_notional = float(filt.get("minNotional", self._min_notional))
-            except Exception:  # pragma: no cover - network issues
-                pass
-
         # environment timing and trade limits ----------------------------
         self.step_seconds = float(cfg.get("step_seconds", 60))
         self.max_trades_per_window = max_trades_per_window
