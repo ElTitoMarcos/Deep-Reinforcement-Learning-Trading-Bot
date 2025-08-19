@@ -44,6 +44,20 @@ reward_weights:
   dd: 0.2
   vol: 0.1
 
+reward_tuner:
+  enabled: true
+  freq_episodes: 50
+  delta: 0.05
+  bounds:
+    w_pnl: [0.5, 3.0]
+    w_drawdown: [0.0, 2.0]
+    w_volatility: [0.0, 2.0]
+    w_turnover: [0.0, 2.0]
+  score_weights:
+    lambda_dd: 1.0
+    kappa_consistency: 0.5
+    mu_activity: 0.1
+
 # Deterministic policy params
 deterministic_policy:
   base_threshold: 0.001   # required 5-tick log-return to enter
