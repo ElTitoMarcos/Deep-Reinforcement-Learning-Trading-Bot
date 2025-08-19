@@ -12,6 +12,7 @@ from src.data.symbol_discovery import discover_symbols
 from src.data import (
     fetch_symbol_metadata,
     fetch_extra_series,
+    validate_symbols,
     validate_ohlcv,
     validate_metadata,
     validate_trades,
@@ -277,6 +278,22 @@ with st.sidebar:
             yaml.safe_dump(new_cfg, f, sort_keys=False, allow_unicode=True)
         st.success(f"Guardado {CONFIG_PATH}")
 
+try:
+    ex_val = get_exchange(use_testnet=use_testnet)
+    selected_valid, invalid_syms = validate_symbols(ex_val, selected_symbols)
+except Exception as e:
+    st.warning(f"No se pudo validar símbolos: {e}")
+    selected_valid, invalid_syms = selected_symbols, []
+if invalid_syms:
+    st.error("Símbolos inválidos")
+    for item in invalid_syms:
+        msg = item["reason"]
+        if item.get("suggest"):
+            msg += f"; quizá quisiste decir {item['suggest']}?"
+        st.write(f"{item['symbol']}: {msg}")
+selected_symbols = selected_valid
+cfg["symbols"] = selected_valid
+
 st.subheader("🧹 Enriquecimiento y verificación de datos")
 if st.button("Obtener y validar datos"):
     from pathlib import Path
@@ -288,6 +305,11 @@ if st.button("Obtener y validar datos"):
         discover_symbols(ex, top_n=5)
     except Exception:
         pass
+    if invalid_syms:
+        st.warning(
+            "Ignorando símbolos inválidos: "
+            + ", ".join(i["symbol"] for i in invalid_syms)
+        )
 
     meta_map = fetch_symbol_metadata(selected_symbols)
     for sym in selected_symbols:
@@ -335,6 +357,11 @@ if st.button("⬇️ Descargar histórico"):
     from datetime import datetime
     import pandas as pd
     try:
+        if invalid_syms:
+            st.warning(
+                "Ignorando símbolos inválidos: "
+                + ", ".join(i["symbol"] for i in invalid_syms)
+            )
         tf_str = cfg.get("timeframe", "1m")
         timeframe_min = int(tf_str.rstrip("m"))
         st.info("Construyendo dataset con tramos de alta actividad...")
@@ -375,6 +402,11 @@ algo_run = algo
 
 if st.button("🚀 Entrenar"):
     import tempfile, yaml
+    if invalid_syms:
+        st.warning(
+            "Ignorando símbolos inválidos: "
+            + ", ".join(i["symbol"] for i in invalid_syms)
+        )
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
         yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
         cfg_path = tmp.name
@@ -409,6 +441,11 @@ with colb2:
 
 if st.button("📈 Evaluar"):
     import tempfile, yaml
+    if invalid_syms:
+        st.warning(
+            "Ignorando símbolos inválidos: "
+            + ", ".join(i["symbol"] for i in invalid_syms)
+        )
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
         yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
         cfg_path = tmp.name
