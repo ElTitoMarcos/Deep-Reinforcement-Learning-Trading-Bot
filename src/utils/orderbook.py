@@ -1,6 +1,9 @@
 from __future__ import annotations
 from typing import List, Tuple, Dict
 
+import numpy as np
+
+
 def wall_signal(orderbook: Dict, pct_threshold: float = 0.02) -> float:
     """Placeholder: detecta 'murallas' de liquidez en bids/asks.
     Devuelve un escalar en [-1, 1]: positivo si hay pared en bids (soporte),
@@ -21,3 +24,39 @@ def wall_signal(orderbook: Dict, pct_threshold: float = 0.02) -> float:
     if abs(bias) < pct_threshold:
         return 0.0
     return max(-1.0, min(1.0, bias))
+
+
+def compute_walls(
+    bids: List[Tuple[float, float]],
+    asks: List[Tuple[float, float]],
+    z_thr: float = 3.0,
+) -> List[float]:
+    """Detecta niveles de precio con volumen anómalo.
+
+    Calcula el *z-score* del tamaño de cada nivel en ``bids`` y ``asks`` y
+    devuelve los precios cuyo valor supera ``z_thr``.  El cálculo se hace de
+    forma independiente por cada lado del libro.
+    """
+
+    walls: List[float] = []
+    for side in (bids, asks):
+        if not side:
+            continue
+        sizes = np.asarray([float(q) for _, q in side], dtype=float)
+        mean = float(sizes.mean())
+        std = float(sizes.std())
+        if std == 0:
+            continue
+        for price, qty in side:
+            z = (float(qty) - mean) / std
+            if z > z_thr:
+                walls.append(float(price))
+    return walls
+
+
+def distancia_a_muralla(mid: float, walls: List[float]) -> float:
+    """Distancia normalizada desde ``mid`` a la muralla más cercana."""
+    if mid <= 0 or not walls:
+        return 0.0
+    nearest = min(walls, key=lambda w: abs(w - mid))
+    return abs(nearest - mid) / mid
