@@ -91,7 +91,7 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
             low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
         )
         # discrete action space: 0=hold, 1=open_long, 2=close
-        self.action_space = spaces.Discrete(3, dtype=np.int64)
+        self.action_space = spaces.Discrete(3)
         # in the future this could include a continuous component (0..1)
         # to express position sizing alongside the discrete action
         # config ---------------------------------------------------------
