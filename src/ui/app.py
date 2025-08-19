@@ -8,6 +8,7 @@ from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.symbol_discovery import discover_symbols
 from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
+from src.auto.strategy_selector import choose_algo
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
@@ -113,8 +114,12 @@ with st.sidebar:
         key="w_vol",
     )
 
-    st.caption("Algoritmo")
-    algo = st.selectbox("Algo", ["ppo", "dqn"], index=0 if (cfg.get("algo","ppo")=="ppo") else 1)
+    stats = cfg.get("stats", {})
+    env_caps = {"obs_type": "continuous", "action_type": "discrete", "state_space": stats.get("state_space", 100)}
+    choice = choose_algo(stats, env_caps)
+    algo = choice["algo"]
+    cfg["algo"] = algo
+    st.success(f"Algoritmo elegido: {algo} — {choice['reason']}")
     ppo = cfg.get("ppo", {})
     dqn = cfg.get("dqn", {})
 
@@ -197,17 +202,30 @@ if st.button("⬇️ Descargar histórico"):
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
 with colt1:
-    algo_run = st.selectbox("Algoritmo", ["ppo","dqn"], index=0 if algo=="ppo" else 1)
+    st.caption(f"Algoritmo: {algo} — {choice['reason']}")
     timesteps = st.number_input("Timesteps", value=20000, step=1000)
 with colt2:
     st.empty()
+algo_run = algo
 
 if st.button("🚀 Entrenar"):
     import tempfile, yaml
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
         yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
         cfg_path = tmp.name
-    cmd = ["python", "-m", "src.training.train_drl", "--config", cfg_path, "--algo", algo_run, "--timesteps", str(int(timesteps))]
+    cmd = [
+        "python",
+        "-m",
+        "src.training.train_drl",
+        "--config",
+        cfg_path,
+        "--algo",
+        algo_run,
+        "--algo-reason",
+        choice["reason"],
+        "--timesteps",
+        str(int(timesteps)),
+    ]
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
