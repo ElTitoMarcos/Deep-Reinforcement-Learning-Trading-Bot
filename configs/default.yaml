@@ -40,6 +40,13 @@ reward_weights:
   dd: 0.2
   vol: 0.1
 
+# Deterministic policy params
+deterministic_policy:
+  base_threshold: 0.001   # required 5-tick log-return to enter
+  bounce_coef: 0.5        # sensitivity of threshold to prior drawdown
+  trailing_pct: 0.01      # exit when price falls this fraction from peak
+  cooldown_ticks: 5       # min ticks between consecutive trades
+
 # Paths
 paths:
   data_root: "data"
