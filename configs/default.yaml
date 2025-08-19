@@ -7,6 +7,7 @@ fees:
   maker: 0.001
 slippage_multiplier: 1.0  # safety factor on estimated slippage
 slippage_depth: 50
+slippage_static: 0.001
 min_notional_usd: 10.0
 filters:
   tickSize: 0.01
