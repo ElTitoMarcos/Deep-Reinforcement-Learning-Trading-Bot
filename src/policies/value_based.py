@@ -82,7 +82,12 @@ class ValueBasedPolicy:
         if np.random.rand() < self.epsilon:
             action = int(np.random.randint(0, self.n_actions))
         else:
-            obs_t = torch.from_numpy(obs_arr).to(self.device).unsqueeze(0)
+            obs_t = torch.from_numpy(obs_arr)
+            if self.device.type == "cuda":
+                obs_t = obs_t.pin_memory().to(self.device, non_blocking=True)
+            else:
+                obs_t = obs_t.to(self.device)
+            obs_t = obs_t.unsqueeze(0)
             with torch.no_grad():
                 q_vals = self.q_net(obs_t)
             assert q_vals.shape == (1, self.n_actions), "q-net output shape mismatch"
@@ -100,16 +105,29 @@ class ValueBasedPolicy:
         if len(self.buffer) < self.cfg.batch_size:
             return None
         states, actions, rewards, next_states, dones = self.buffer.sample(self.cfg.batch_size)
-        states = torch.tensor(states, dtype=torch.float32, device=self.device)
-        actions = torch.tensor(actions, dtype=torch.int64, device=self.device).unsqueeze(-1)
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device).unsqueeze(-1)
-        next_states = torch.tensor(next_states, dtype=torch.float32, device=self.device)
-        dones = torch.tensor(dones, dtype=torch.float32, device=self.device).unsqueeze(-1)
+        states_t = torch.tensor(states, dtype=torch.float32)
+        actions_t = torch.tensor(actions, dtype=torch.int64).unsqueeze(-1)
+        rewards_t = torch.tensor(rewards, dtype=torch.float32).unsqueeze(-1)
+        next_states_t = torch.tensor(next_states, dtype=torch.float32)
+        dones_t = torch.tensor(dones, dtype=torch.float32).unsqueeze(-1)
 
-        q = self.q_net(states).gather(1, actions)
+        if self.device.type == "cuda":
+            states_t = states_t.pin_memory().to(self.device, non_blocking=True)
+            actions_t = actions_t.pin_memory().to(self.device, non_blocking=True)
+            rewards_t = rewards_t.pin_memory().to(self.device, non_blocking=True)
+            next_states_t = next_states_t.pin_memory().to(self.device, non_blocking=True)
+            dones_t = dones_t.pin_memory().to(self.device, non_blocking=True)
+        else:
+            states_t = states_t.to(self.device)
+            actions_t = actions_t.to(self.device)
+            rewards_t = rewards_t.to(self.device)
+            next_states_t = next_states_t.to(self.device)
+            dones_t = dones_t.to(self.device)
+
+        q = self.q_net(states_t).gather(1, actions_t)
         with torch.no_grad():
-            max_next = self.target_net(next_states).max(dim=1, keepdim=True)[0]
-            target = rewards + self.gamma * (1 - dones) * max_next
+            max_next = self.target_net(next_states_t).max(dim=1, keepdim=True)[0]
+            target = rewards_t + self.gamma * (1 - dones_t) * max_next
         loss = F.mse_loss(q, target)
 
         self.optim.zero_grad()

@@ -5,6 +5,7 @@ import streamlit as st
 from src.utils.config import load_config
 from src.utils.paths import ensure_dirs_exist, get_raw_dir, get_reports_dir
 from src.reports.human_friendly import render_panel
+from src.utils.device import get_device, set_cpu_threads
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.volatility_windows import find_high_activity_windows
 from src.data.symbol_discovery import discover_symbols
@@ -18,6 +19,16 @@ CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 st.set_page_config(page_title="DRL Trading Config", layout="wide")
 
 st.title("⚙️ Configuración DRL Trading")
+
+device = get_device()
+if device == "cuda":
+    import torch
+
+    name = torch.cuda.get_device_name(0)
+    st.sidebar.success(f"Dispositivo: CUDA ({name})")
+else:
+    threads = set_cpu_threads()
+    st.sidebar.info(f"Dispositivo: CPU ({threads} hilos)")
 
 with st.sidebar:
     st.header("Ajustes globales")

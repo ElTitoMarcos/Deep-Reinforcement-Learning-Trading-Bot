@@ -8,6 +8,8 @@ from ..utils.data_io import load_table
 from ..utils.config import load_config
 from ..utils.paths import get_raw_dir, get_reports_dir, ensure_dirs_exist
 from ..reports.human_friendly import write_readme
+from ..utils.device import get_device, set_cpu_threads
+
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
 from datetime import datetime, timezone
@@ -39,14 +41,28 @@ def main():
     fee = cfg.get("fees", {}).get("taker", 0.001)
     print(f"Using fees: {cfg.get('fees', {})}")
 
+    device = get_device()
+    if device == "cuda":
+        import torch
+
+        name = torch.cuda.get_device_name(0)
+        print(f"Using device: CUDA ({name})")
+    else:
+        threads = set_cpu_threads()
+        print(f"Using device: CPU ({threads} threads)")
+
+    def _pk(name: str):
+        return {"config": {"device": device}} if name in {"value_based", "dqn", "value", "value-based"} else {}
+
     if args.policy.lower() == "hybrid":
         names = ["deterministic", "stochastic", "value_based"]
         defaults = [0.5, 0.3, 0.2]
         policies = {}
         init_w = {}
+
         for n, w in zip(names, defaults):
             try:
-                policies[n] = get_policy(n)
+                policies[n] = get_policy(n, **_pk(n))
                 init_w[n] = w
             except Exception:
                 pass
@@ -59,7 +75,7 @@ def main():
             for n in pol.policies:
                 sim_b = simulate(
                     block,
-                    get_policy(n),
+                    get_policy(n, **_pk(n)),
                     fees=fee,
                     slippage_multiplier=cfg.get("slippage_multiplier", 1.0),
                     min_notional_usd=cfg.get("min_notional_usd", 10.0),
@@ -89,7 +105,7 @@ def main():
             slippage_depth=int(cfg.get("slippage_depth", 50)),
         )
     else:
-        pol = get_policy(args.policy)
+        pol = get_policy(args.policy, **_pk(args.policy))
         sim = simulate(
             df,
             pol,
