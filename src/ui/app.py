@@ -1,6 +1,7 @@
 import os, io, sys, json, subprocess, time
 from datetime import datetime, UTC
 import streamlit as st
+from src.ui.log_stream import subscribe as log_subscribe
 
 from src.utils.config import load_config
 from src.utils import paths
@@ -541,5 +542,38 @@ if st.button("📈 Evaluar"):
             st.error(res.stderr)
     except Exception as e:
         st.error(f"Fallo al evaluar: {e}")
+st.subheader("Actividad en vivo")
+kind_options = ["trades", "riesgo", "datos", "checkpoints", "llm"]
+selected_kinds = st.multiselect("Tipos", kind_options, default=kind_options, key="log_kind_sel")
 
-st.caption("Consejo: usa un terminal aparte si prefieres ver logs en tiempo real mientras el entrenamiento corre.")
+if "log_paused" not in st.session_state:
+    st.session_state["log_paused"] = False
+
+if st.button("Pausar" if not st.session_state["log_paused"] else "Reanudar", key="pause_feed"):
+    st.session_state["log_paused"] = not st.session_state["log_paused"]
+
+placeholder = st.empty()
+if "log_lines" not in st.session_state:
+    st.session_state["log_lines"] = []
+
+if "log_iter" not in st.session_state or st.session_state.get("log_iter_kinds") != set(selected_kinds):
+    st.session_state["log_iter_kinds"] = set(selected_kinds)
+    st.session_state["log_iter"] = log_subscribe(kinds=set(selected_kinds))
+
+if not st.session_state["log_paused"]:
+    start = time.time()
+    gen = st.session_state["log_iter"]
+    while time.time() - start < 0.5:
+        try:
+            item = next(gen)
+            st.session_state["log_lines"].append(item["message"])
+        except StopIteration:
+            break
+        except Exception:
+            break
+    st.session_state["log_lines"] = st.session_state["log_lines"][-200:]
+placeholder.text("\n".join(st.session_state.get("log_lines", [])))
+
+if not st.session_state["log_paused"]:
+    time.sleep(0.5)
+    st.experimental_rerun()
