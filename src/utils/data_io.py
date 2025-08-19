@@ -39,6 +39,27 @@ def load_table(path: str) -> pd.DataFrame:
         raise ValueError(f"Unsupported extension: {ext}")
 
 
+# ---------------------------------------------------------------------------
+# universe helpers
+
+UNIVERSE_COLUMNS = [
+    "symbol",
+    "quote",
+    "base",
+    "avg_volume_24h",
+    "first_seen",
+    "exchange",
+]
+
+
+def save_universe(df: pd.DataFrame, path: str) -> str:
+    """Persist a universe table in CSV or Parquet format."""
+
+    df = df[UNIVERSE_COLUMNS].copy()
+    save_table(df, path)
+    return path
+
+
 def validate_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """Basic validation and UTC normalization for OHLCV tables."""
     missing = set(REQUIRED_OHLCV_COLUMNS) - set(df.columns)
