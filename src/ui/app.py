@@ -87,11 +87,31 @@ with st.sidebar:
     step_size = st.number_input("stepSize", value=float(cfg.get("filters",{}).get("stepSize",0.0001)))
 
     st.caption("Reward heads (pesos)")
-    rw = cfg.get("reward_weights", {"pnl":1.0,"turnover_penalty":0.1,"drawdown_penalty":0.2,"volatility_penalty":0.1})
-    w_pnl = st.number_input("w_pnl", value=float(rw.get("pnl",1.0)))
-    w_turn = st.number_input("w_turnover", value=float(rw.get("turnover_penalty",0.1)))
-    w_dd = st.number_input("w_drawdown", value=float(rw.get("drawdown_penalty",0.2)))
-    w_vol = st.number_input("w_volatility", value=float(rw.get("volatility_penalty",0.1)))
+    rw = cfg.get("reward_weights", {"pnl": 1.0, "turn": 0.1, "dd": 0.2, "vol": 0.1})
+    beneficio = st.number_input(
+        "Beneficio (más alto = priorizar ganar dinero)",
+        value=float(rw.get("pnl", 1.0)),
+        help="Sube si buscas ganancias; sugerido 1.0",
+        key="w_pnl",
+    )
+    control_act = st.number_input(
+        "Control de actividad (más alto = operar menos)",
+        value=float(rw.get("turn", 0.1)),
+        help="Sube para operar menos; sugerido 0.1",
+        key="w_turn",
+    )
+    proteccion = st.number_input(
+        "Protección ante rachas malas (más alto = evitar caídas)",
+        value=float(rw.get("dd", 0.2)),
+        help="Sube para evitar caídas; sugerido 0.2",
+        key="w_dd",
+    )
+    suavidad = st.number_input(
+        "Suavidad de resultados (más alto = menos diente de sierra)",
+        value=float(rw.get("vol", 0.1)),
+        help="Sube para suavizar; sugerido 0.1",
+        key="w_vol",
+    )
 
     st.caption("Algoritmo")
     algo = st.selectbox("Algo", ["ppo", "dqn"], index=0 if (cfg.get("algo","ppo")=="ppo") else 1)
@@ -137,7 +157,12 @@ with st.sidebar:
                 "target_update": int(dqn_target), "epsilon_start": dqn_eps_s,
                 "epsilon_end": dqn_eps_e, "epsilon_decay_steps": int(dqn_eps_d)
             },
-            "reward_weights": {"pnl": w_pnl, "turnover_penalty": w_turn, "drawdown_penalty": w_dd, "volatility_penalty": w_vol},
+            "reward_weights": {
+                "pnl": beneficio,
+                "turn": control_act,
+                "dd": proteccion,
+                "vol": suavidad,
+            },
             "paths": paths_cfg,
         }
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
