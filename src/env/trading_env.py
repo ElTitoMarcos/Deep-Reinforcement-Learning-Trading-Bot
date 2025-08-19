@@ -56,6 +56,7 @@ except Exception:  # pragma: no cover - optional gym dependency
 
 from ..utils.orderbook import compute_walls, distancia_a_muralla
 from ..risk.slippage import estimate_slippage
+from ..utils.risk import apply_price_tick, apply_qty_step
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +115,7 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         self.w_vol = float(rw.get("vol", 0.0))
         self.slippage_mult = float(cfg.get("slippage_multiplier", 1.0))
         self.slippage_depth = int(cfg.get("slippage_depth", 50))
+        self.slippage_static = float(cfg.get("slippage_static", 0.0))
 
         self.meta = meta
         self.symbol = symbol
@@ -319,30 +321,32 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
             attempted_trade = True
             if can_trade():
                 price = prev_price
-                qty = 1.0
-                if self._step_size > 0:
-                    qty = round(qty / self._step_size) * self._step_size
+                qty = apply_qty_step(1.0, self._step_size)
                 notional = price * qty
                 recent = self._close[max(0, self.current_step - 60) : self.current_step + 1]
-                slip = estimate_slippage(
-                    self.symbol or "BTC/USDT",
-                    notional,
-                    "buy",
-                    depth=self.slippage_depth,
-                    prices=recent,
-                ) * self.slippage_mult
+                try:
+                    slip = estimate_slippage(
+                        self.symbol or "BTC/USDT",
+                        notional,
+                        "buy",
+                        depth=self.slippage_depth,
+                        prices=recent,
+                    ) * self.slippage_mult
+                except Exception as exc:  # pragma: no cover - safety net
+                    logger.warning("slippage_static reason=%s", exc)
+                    slip = self.slippage_static * self.slippage_mult
                 price *= 1.0 + slip
-                if self._tick_size > 0:
-                    price = round(price / self._tick_size) * self._tick_size
+                price = apply_price_tick(price, self._tick_size)
                 value = price * qty
                 logger.info(
-                    "open_order price=%.8f qty=%.8f value=%.8f slippage=%.6f tick=%.8f step=%.8f",
+                    "open_order price=%.8f qty=%.8f value=%.8f slippage=%.6f tick=%.8f step=%.8f minNotional=%.8f",
                     price,
                     qty,
                     value,
                     slip,
                     self._tick_size,
                     self._step_size,
+                    self._min_notional,
                 )
                 if value < self._min_notional:
                     logger.info(
@@ -363,29 +367,32 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
             if can_trade():
                 price = prev_price
                 qty = self.position_size if self.position_size > 0 else 1.0
-                if self._step_size > 0:
-                    qty = round(qty / self._step_size) * self._step_size
+                qty = apply_qty_step(qty, self._step_size)
                 notional = price * qty
                 recent = self._close[max(0, self.current_step - 60) : self.current_step + 1]
-                slip = estimate_slippage(
-                    self.symbol or "BTC/USDT",
-                    notional,
-                    "sell",
-                    depth=self.slippage_depth,
-                    prices=recent,
-                ) * self.slippage_mult
+                try:
+                    slip = estimate_slippage(
+                        self.symbol or "BTC/USDT",
+                        notional,
+                        "sell",
+                        depth=self.slippage_depth,
+                        prices=recent,
+                    ) * self.slippage_mult
+                except Exception as exc:  # pragma: no cover - safety net
+                    logger.warning("slippage_static reason=%s", exc)
+                    slip = self.slippage_static * self.slippage_mult
                 price *= 1.0 - slip
-                if self._tick_size > 0:
-                    price = round(price / self._tick_size) * self._tick_size
+                price = apply_price_tick(price, self._tick_size)
                 value = price * qty
                 logger.info(
-                    "close_order price=%.8f qty=%.8f value=%.8f slippage=%.6f tick=%.8f step=%.8f",
+                    "close_order price=%.8f qty=%.8f value=%.8f slippage=%.6f tick=%.8f step=%.8f minNotional=%.8f",
                     price,
                     qty,
                     value,
                     slip,
                     self._tick_size,
                     self._step_size,
+                    self._min_notional,
                 )
                 if value < self._min_notional:
                     logger.info(

@@ -171,94 +171,85 @@ with st.sidebar:
     )
 
     stats = cfg.get("stats", {})
-    env_caps = {"obs_type": "continuous", "action_type": "discrete", "state_space": stats.get("state_space", 100)}
+    env_caps = {
+        "obs_type": "continuous",
+        "action_type": "discrete",
+        "state_space": stats.get("state_space", 100),
+    }
     choice = choose_algo(stats, env_caps)
     algo = choice["algo"]
     cfg["algo"] = algo
-    st.success(f"Algoritmo elegido: {algo} — {choice['reason']}")
     suggested = tune(algo, stats, [])
     if algo == "hybrid":
         ppo_sug = suggested.get("ppo", {})
         dqn_sug = suggested.get("dqn", {})
-        st.subheader("Hiperparámetros críticos PPO")
-        ppo_lr = st.number_input(
-            "Velocidad de aprendizaje (qué tan rápido aprende)",
-            value=float(ppo_sug.get("learning_rate", 3e-4)),
-            format="%.6f",
-            help=f"Sugerido {ppo_sug.get('learning_rate',3e-4):.2e}",
-            key="ppo_lr",
-        )
-        ppo_batch = st.number_input(
-            "Tamaño de lote (cada cuántos ejemplos actualiza)",
-            value=int(ppo_sug.get("batch_size", 64)),
-            help=f"Sugerido {ppo_sug.get('batch_size',64)}",
-            key="ppo_batch",
-        )
-        ppo_steps = st.number_input(
-            "Horizonte de actualización (pasos antes de actualizar)",
-            value=int(ppo_sug.get("n_steps", 2048)),
-            help=f"Sugerido {ppo_sug.get('n_steps',2048)}",
-            key="ppo_steps",
-        )
-        st.subheader("Hiperparámetros críticos DQN")
-        dqn_lr = st.number_input(
-            "Velocidad de aprendizaje (qué tan rápido aprende) [DQN]",
-            value=float(dqn_sug.get("learning_rate", 1e-3)),
-            format="%.6f",
-            help=f"Sugerido {dqn_sug.get('learning_rate',1e-3):.2e}",
-            key="dqn_lr",
-        )
-        dqn_batch = st.number_input(
-            "Tamaño de lote (cada cuántos ejemplos actualiza) [DQN]",
-            value=int(dqn_sug.get("batch_size", 64)),
-            help=f"Sugerido {dqn_sug.get('batch_size',64)}",
-            key="dqn_batch",
-        )
-        dqn_steps = st.number_input(
-            "Horizonte de actualización (pasos antes de actualizar) [DQN]",
-            value=int(dqn_sug.get("n_steps", 1000)),
-            help=f"Sugerido {dqn_sug.get('n_steps',1000)}",
-            key="dqn_steps",
-        )
-        cfg["ppo"] = {
-            "learning_rate": ppo_lr,
-            "batch_size": int(ppo_batch),
-            "n_steps": int(ppo_steps),
-        }
-        cfg["dqn"] = {
-            "learning_rate": dqn_lr,
-            "batch_size": int(dqn_batch),
-            "target_update": int(dqn_steps),
+
+        def _avg(key: str, default: float | int) -> float:
+            p = ppo_sug.get(key)
+            d = dqn_sug.get("target_update" if key == "n_steps" else key)
+            vals = [v for v in [p, d] if v is not None]
+            return float(sum(vals) / len(vals)) if vals else float(default)
+
+        suggested_flat = {
+            "learning_rate": _avg("learning_rate", 3e-4),
+            "batch_size": int(_avg("batch_size", 64)),
+            "n_steps": int(_avg("n_steps", 2048)),
         }
     else:
-        lr = st.number_input(
-            "Velocidad de aprendizaje (qué tan rápido aprende)",
-            value=float(suggested.get("learning_rate", 3e-4)),
-            format="%.6f",
-            help=f"Sugerido {suggested.get('learning_rate',3e-4):.2e}",
-        )
-        batch = st.number_input(
-            "Tamaño de lote (cada cuántos ejemplos actualiza)",
-            value=int(suggested.get("batch_size", 64)),
-            help=f"Sugerido {suggested.get('batch_size',64)}",
-        )
-        horizon = st.number_input(
-            "Horizonte de actualización (pasos antes de actualizar)",
-            value=int(suggested.get("n_steps", 2048)),
-            help=f"Sugerido {suggested.get('n_steps',2048)}",
-        )
-        if algo == "ppo":
-            cfg["ppo"] = {
-                "learning_rate": lr,
-                "batch_size": int(batch),
-                "n_steps": int(horizon),
-            }
+        suggested_flat = {
+            "learning_rate": float(suggested.get("learning_rate", 3e-4)),
+            "batch_size": int(suggested.get("batch_size", 64)),
+            "n_steps": int(suggested.get("n_steps", suggested.get("target_update", 2048))),
+        }
+
+    lr = st.number_input(
+        "Velocidad de aprendizaje",
+        value=float(suggested_flat["learning_rate"]),
+        format="%.6f",
+        help=f"Sugerido {suggested_flat['learning_rate']:.2e}",
+    )
+    batch = st.number_input(
+        "Tamaño de lote",
+        value=int(suggested_flat["batch_size"]),
+        help=f"Sugerido {suggested_flat['batch_size']}",
+    )
+    horizon = st.number_input(
+        "Horizonte de actualización",
+        value=int(suggested_flat["n_steps"]),
+        help=f"Sugerido {suggested_flat['n_steps']}",
+    )
+    selected = {"learning_rate": lr, "batch_size": int(batch), "n_steps": int(horizon)}
+
+    if algo == "ppo":
+        cfg["ppo"] = selected
+    elif algo == "dqn":
+        cfg["dqn"] = {
+            "learning_rate": lr,
+            "batch_size": int(batch),
+            "target_update": int(horizon),
+        }
+    else:  # hybrid
+        cfg["ppo"] = selected
+        cfg["dqn"] = {
+            "learning_rate": lr,
+            "batch_size": int(batch),
+            "target_update": int(horizon),
+        }
+
+    if st.button("Explicación"):
+        st.info(f"Algoritmo elegido: {algo}")
+        st.write(choice["reason"])
+        diffs = {
+            k: (suggested_flat[k], selected[k])
+            for k in selected
+            if selected[k] != suggested_flat[k]
+        }
+        if diffs:
+            st.write("Ajustes modificados:")
+            for k, (sug, val) in diffs.items():
+                st.write(f"{k}: {sug} -> {val}")
         else:
-            cfg["dqn"] = {
-                "learning_rate": lr,
-                "batch_size": int(batch),
-                "target_update": int(horizon),
-            }
+            st.write("Se usan hiperparámetros sugeridos sin cambios.")
 
     st.header("Asistente LLM")
     llm_model = st.selectbox(
@@ -494,8 +485,8 @@ if st.button("📈 Evaluar"):
             latest = run_dirs[0]
             try:
                 with open(latest / "metrics.json") as f:
-                    metrics = json.load(f)
-                render_panel(metrics)
+                    results = json.load(f)
+                render_panel(results)
                 st.caption(f"Resumen guardado en {latest}")
             except Exception as err:
                 st.error(f"No se pudo leer métricas: {err}")

@@ -30,3 +30,24 @@ def ensure_dirs_exist(cfg: Mapping[str, Any]) -> None:
     """Create common project directories if they do not already exist."""
     for directory in [get_raw_dir(cfg), get_reports_dir(cfg), get_checkpoints_dir(cfg)]:
         directory.mkdir(parents=True, exist_ok=True)
+
+
+def symbol_to_dir(symbol: str) -> str:
+    """Return the on-disk representation for a trading pair.
+
+    ``"ETH/USDT"`` -> ``"ETH-USDT"``
+    """
+
+    return symbol.replace("/", "-")
+
+
+def raw_parquet_path(
+    exchange: str,
+    symbol: str,
+    timeframe: str,
+    root: Path | str | None = None,
+) -> Path:
+    """Return the path to the raw OHLCV parquet file."""
+
+    base = Path(root) if root else Path("data/raw")
+    return base / exchange / symbol_to_dir(symbol) / f"{timeframe}.parquet"
