@@ -8,6 +8,7 @@ from typing import Any
 import pandas as pd
 
 from ..utils import paths
+from ..utils.data_io import read_parquet_safe, write_parquet_atomic
 from .ccxt_loader import fetch_ohlcv
 
 _EXCHANGE = "binance"
@@ -51,13 +52,31 @@ def fetch_ohlcv_incremental(
 
 def upsert_parquet(df: pd.DataFrame, path: Path) -> None:
     """Merge *df* into Parquet *path* without duplicates."""
+
     if df.empty:
         return
+
     path.parent.mkdir(parents=True, exist_ok=True)
+
+    ts_col = "timestamp"
+    rename_back = False
+    if ts_col not in df.columns and "ts" in df.columns:
+        df = df.rename(columns={"ts": ts_col})
+        rename_back = True
+
     if path.exists():
-        old = pd.read_parquet(path)
+        old = read_parquet_safe(path)
+        if ts_col not in old.columns and "ts" in old.columns:
+            old = old.rename(columns={"ts": ts_col})
         df = pd.concat([old, df], ignore_index=True)
-    df = df.drop_duplicates(subset=["ts"]).sort_values("ts").reset_index(drop=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    df.to_parquet(paths.posix(tmp), index=False)
-    tmp.replace(path)
+
+    df = (
+        df.drop_duplicates(subset=[ts_col])
+        .sort_values(ts_col)
+        .reset_index(drop=True)
+    )
+
+    if rename_back:
+        df = df.rename(columns={ts_col: "ts"})
+
+    write_parquet_atomic(df, path)

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import time
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -42,6 +45,35 @@ def load_table(path: str) -> pd.DataFrame:
         return pd.read_parquet(path)
     else:
         raise ValueError(f"Unsupported extension: {ext}")
+
+
+def write_parquet_atomic(df: pd.DataFrame, path: str | os.PathLike[str]) -> None:
+    """Write *df* to *path* atomically.
+
+    The DataFrame is first written to a temporary file in the same
+    directory, flushed to disk and then moved into place using
+    :func:`os.replace`.
+    """
+
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    df.to_parquet(posix(tmp), index=False)
+    # ensure data is persisted before rename
+    with open(posix(tmp), "rb") as fh:
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(posix(tmp), posix(p))
+
+
+def read_parquet_safe(path: str | os.PathLike[str]) -> pd.DataFrame:
+    """Read a Parquet file retrying once if the first attempt fails."""
+
+    p = Path(path)
+    try:
+        return pd.read_parquet(posix(p))
+    except Exception:
+        time.sleep(0.1)
+        return pd.read_parquet(posix(p))
 
 
 # ---------------------------------------------------------------------------
