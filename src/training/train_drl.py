@@ -560,6 +560,7 @@ def main() -> None:
             }
             with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
+                
     df = load_data(cfg, args.data, args.timesteps)
     env = TradingEnv(df, cfg=cfg)
     print(f"Using fees: {cfg.get('fees', {})}")
