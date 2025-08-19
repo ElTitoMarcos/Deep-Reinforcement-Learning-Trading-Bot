@@ -228,6 +228,27 @@ with st.sidebar:
                 "target_update": int(horizon),
             }
 
+    st.header("Asistente LLM")
+    llm_model = st.selectbox(
+        "Modelo",
+        ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
+        index=0,
+    )
+    llm_reason = st.checkbox("Usar LLM para decisiones razonadas")
+    llm_periodic = st.checkbox("Llamadas periódicas durante entrenamiento")
+    llm_every = (
+        st.number_input("cada N episodios", value=10, min_value=1, step=1)
+        if llm_periodic
+        else None
+    )
+    cfg["llm"] = {
+        "model": llm_model,
+        "enabled": bool(llm_reason or llm_periodic),
+        "use_reasoned": bool(llm_reason),
+        "periodic": bool(llm_periodic),
+        "every_n": int(llm_every) if llm_every else None,
+    }
+
     if st.button("💾 Guardar config YAML"):
         import yaml
         new_cfg = {
@@ -242,6 +263,7 @@ with st.sidebar:
             "algo": algo,
             "ppo": cfg.get("ppo", {}),
             "dqn": cfg.get("dqn", {}),
+            "llm": cfg.get("llm", {}),
             "reward_weights": {
                 "pnl": beneficio,
                 "turn": control_act,

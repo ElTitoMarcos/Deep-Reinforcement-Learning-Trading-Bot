@@ -31,9 +31,15 @@ from ..auto.hparam_tuner import tune
 from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger, config_hash
-from ..utils.paths import get_raw_dir, get_checkpoints_dir, ensure_dirs_exist
+from ..utils.paths import (
+    get_raw_dir,
+    get_checkpoints_dir,
+    ensure_dirs_exist,
+    get_reports_dir,
+)
 from ..utils.device import get_device, set_cpu_threads
 from ..policies.value_based import ValueBasedPolicy
+from ..llm import LLMClient, SYSTEM_PROMPT, build_periodic_prompt
 
 
 # ---------------------------------------------------------------------------
@@ -144,6 +150,44 @@ def quick_eval(env: TradingEnv, agent: TinyDQN) -> float:
         obs, _, done, _, _ = eval_env.step(action)
     return float(eval_env.equity)
 
+
+def _maybe_call_llm(
+    cfg: dict,
+    algo_key: str,
+    episode: int,
+    reward: float,
+    env: TradingEnv,
+    llm_client: LLMClient | None,
+    llm_file,
+    logger,
+) -> None:
+    """Invoke the LLM with training context if enabled."""
+
+    if llm_client is None:
+        return
+    prompt = build_periodic_prompt(
+        cfg,
+        algo=algo_key,
+        hparams=cfg.get(algo_key, {}),
+        episodios=episode,
+        reward=reward,
+        pnl=float(getattr(env, "equity", 0.0)),
+        dd=0.0,
+        cons=0.0,
+    )
+    try:
+        resp = llm_client.ask(SYSTEM_PROMPT, prompt)
+        try:
+            data = json.loads(resp)
+        except Exception:
+            data = {"raw": resp}
+        if llm_file:
+            llm_file.write(json.dumps(data) + "\n")
+            llm_file.flush()
+        logger.log("INFO", "llm_suggestion", episode=episode, suggestion=data)
+    except Exception as e:  # pragma: no cover - network issues
+        logger.log("ERROR", "llm_error", episode=episode, err=str(e))
+
 # ---------------------------------------------------------------------------
 # Model IO helpers ----------------------------------------------------------
 
@@ -176,6 +220,7 @@ def train_value_dqn(
     *,
     outdir: str = "checkpoints",
     checkpoint_freq: int = 10,
+    logger=None,
 ) -> str:
     """Train the PyTorch value-based policy with the flexible MLP network."""
 
@@ -183,14 +228,28 @@ def train_value_dqn(
     obs_dim = int(env.observation_space.shape[0])
     n_actions = int(env.action_space.n)
     agent = ValueBasedPolicy(obs_dim, n_actions, config=dqn_cfg)
+    if logger is None:
+        logger = ensure_logger(None)
+
+    llm_cfg = cfg.get("llm", {})
+    llm_client = None
+    llm_file = None
+    llm_every = int(llm_cfg.get("every_n") or 0)
+    if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
+        llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
+        reports_dir = get_reports_dir(cfg)
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
 
     total_steps = 0
     episode = 0
+    total_reward = 0.0
     os.makedirs(outdir, exist_ok=True)
     while total_steps < timesteps:
         obs, _ = env.reset()
         done = False
         episode += 1
+        ep_reward = 0.0
         while not done and total_steps < timesteps:
             action = agent.act(obs)
             next_obs, reward, done, trunc, _info = env.step(action)
@@ -198,6 +257,21 @@ def train_value_dqn(
             agent.train_step()
             obs = next_obs
             total_steps += 1
+            ep_reward += reward
+
+        total_reward += ep_reward
+        if llm_client and episode % llm_every == 0:
+            mean_reward = total_reward / episode
+            _maybe_call_llm(
+                cfg,
+                "dqn",
+                episode,
+                mean_reward,
+                env,
+                llm_client,
+                llm_file,
+                logger,
+            )
 
         if checkpoint_freq and episode % checkpoint_freq == 0:
             ckpt = os.path.join(outdir, f"vdqn_ep{episode}.pt")
@@ -205,6 +279,8 @@ def train_value_dqn(
 
     symbol = (cfg.get("symbols") or ["UNK"])[0].replace("/", "-")
     final_path = save_model(agent, "dqn", symbol)
+    if llm_file:
+        llm_file.close()
 
     return final_path
 
@@ -216,6 +292,7 @@ def train_dqn(
     *,
     outdir: str = "checkpoints",
     checkpoint_freq: int = 10,
+    logger=None,
 ) -> str:
     """Train the tiny DQN agent with episode/step loops."""
 
@@ -228,16 +305,31 @@ def train_dqn(
     )
     agent = TinyDQN(env.observation_space.shape[0], env.action_space.n, params)
 
+    if logger is None:
+        logger = ensure_logger(None)
+
+    llm_cfg = cfg.get("llm", {})
+    llm_client = None
+    llm_file = None
+    llm_every = int(llm_cfg.get("every_n") or 0)
+    if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
+        llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
+        reports_dir = get_reports_dir(cfg)
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
+
     eps_start = dqn_cfg.get("epsilon_start", 1.0)
     eps_end = dqn_cfg.get("epsilon_end", 0.05)
     eps_decay_steps = dqn_cfg.get("epsilon_decay_steps", timesteps // 2 or 1)
 
     total_steps = 0
     episode = 0
+    total_reward = 0.0
     while total_steps < timesteps:
         obs, _ = env.reset()
         done = False
         episode += 1
+        ep_reward = 0.0
         while not done and total_steps < timesteps:
             eps = max(eps_end, eps_start - (eps_start - eps_end) * (total_steps / eps_decay_steps))
             action = agent.act(obs, eps)
@@ -246,6 +338,21 @@ def train_dqn(
             agent.update()
             obs = next_obs
             total_steps += 1
+            ep_reward += reward
+
+        total_reward += ep_reward
+        if llm_client and episode % llm_every == 0:
+            mean_reward = total_reward / episode
+            _maybe_call_llm(
+                cfg,
+                "dqn",
+                episode,
+                mean_reward,
+                env,
+                llm_client,
+                llm_file,
+                logger,
+            )
 
         if checkpoint_freq and episode % checkpoint_freq == 0:
             ckpt = os.path.join(outdir, f"dqn_ep{episode}.npz")
@@ -263,6 +370,8 @@ def train_dqn(
     os.makedirs(outdir, exist_ok=True)
     with open(os.path.join(outdir, "dqn_meta.json"), "w", encoding="utf-8") as fh:
         json.dump(meta, fh)
+    if llm_file:
+        llm_file.close()
     return final_path
 
 
@@ -360,11 +469,21 @@ def main() -> None:
     ckpt_dir = str(get_checkpoints_dir(cfg))
     if algo_key == "dqn":
         out = train_value_dqn(
-            env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
+            env,
+            cfg,
+            args.timesteps,
+            outdir=ckpt_dir,
+            checkpoint_freq=args.checkpoint_freq,
+            logger=logger,
         )
     elif algo_key == "tiny":
         out = train_dqn(
-            env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
+            env,
+            cfg,
+            args.timesteps,
+            outdir=ckpt_dir,
+            checkpoint_freq=args.checkpoint_freq,
+            logger=logger,
         )
     elif algo_key == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
@@ -375,7 +494,12 @@ def main() -> None:
             raise RuntimeError("stable-baselines3 is required for PPO training")
         ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir, device=device)
         dqn_path = train_value_dqn(
-            env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
+            env,
+            cfg,
+            args.timesteps,
+            outdir=ckpt_dir,
+            checkpoint_freq=args.checkpoint_freq,
+            logger=logger,
         )
         out = json.dumps({"ppo": ppo_path, "dqn": dqn_path})
     else:  # pragma: no cover
