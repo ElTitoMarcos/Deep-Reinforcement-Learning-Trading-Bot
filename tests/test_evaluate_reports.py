@@ -8,6 +8,7 @@ import yaml
 
 def test_evaluate_creates_report(tmp_path):
     cfg = yaml.safe_load(Path('configs/default.yaml').read_text())
+    cfg['fees'] = {'taker': 0.005, 'maker': 0.004}
     cfg_paths = cfg.setdefault('paths', {})
     cfg_paths['raw_dir'] = str(tmp_path / 'raw')
     cfg_paths['reports_dir'] = str(tmp_path / 'reports')
@@ -29,12 +30,15 @@ def test_evaluate_creates_report(tmp_path):
 
     env = os.environ.copy()
     env['MPLBACKEND'] = 'Agg'
-    subprocess.run(
+    res = subprocess.run(
         ['python', '-m', 'src.backtest.evaluate', '--config', str(cfg_path), '--policy', 'deterministic'],
         check=True,
+        capture_output=True,
+        text=True,
         env=env,
         cwd=Path(__file__).resolve().parents[1],
     )
+    assert '0.005' in res.stdout
 
     reports_dir = Path(cfg_paths['reports_dir'])
     runs = list(reports_dir.iterdir())

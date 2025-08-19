@@ -6,6 +6,8 @@ from src.utils.config import load_config
 from src.utils.paths import ensure_dirs_exist, get_raw_dir
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.symbol_discovery import discover_symbols
+from src.exchange.binance_meta import BinanceMeta
+from dotenv import load_dotenv
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
@@ -53,7 +55,26 @@ with st.sidebar:
     selected_symbols = [s for s, v in checks.items() if v]
     cfg["symbols"] = selected_symbols
 
-    fees_taker = st.number_input("Fee taker", value=float(cfg.get("fees",{}).get("taker",0.001)), step=0.0001, format="%.6f")
+    fees_dict = cfg.get("fees", {})
+    fees_maker = st.number_input("Fee maker", value=float(fees_dict.get("maker",0.001)), step=0.0001, format="%.6f", key="fee_maker")
+    fees_taker = st.number_input("Fee taker", value=float(fees_dict.get("taker",0.001)), step=0.0001, format="%.6f", key="fee_taker")
+    if st.button("Actualizar comisiones"):
+        load_dotenv()
+        api_key = os.getenv("BINANCE_API_KEY")
+        api_secret = os.getenv("BINANCE_API_SECRET")
+        try:
+            meta = BinanceMeta(api_key, api_secret, use_testnet)
+            fee_map = meta.get_account_trade_fees()
+            symbol_key = (selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map)))
+            entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
+            st.session_state["fee_maker"] = entry.get("maker", fees_maker)
+            st.session_state["fee_taker"] = entry.get("taker", fees_taker)
+            st.success(f"Maker {entry.get('maker',0)} | Taker {entry.get('taker',0)}")
+        except Exception as e:
+            st.error(f"No se pudo obtener: {e}")
+    fees_maker = st.session_state.get("fee_maker", fees_maker)
+    fees_taker = st.session_state.get("fee_taker", fees_taker)
+    cfg["fees"] = {"maker": fees_maker, "taker": fees_taker}
     slippage = st.number_input("Slippage", value=float(cfg.get("slippage",0.0005)), step=0.0001, format="%.6f")
     min_notional = st.number_input("Mínimo notional USD", value=float(cfg.get("min_notional_usd",10.0)), step=1.0)
 

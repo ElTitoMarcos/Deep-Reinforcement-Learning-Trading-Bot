@@ -134,7 +134,7 @@ def load_data(cfg: dict, data_path: str | None, timesteps: int) -> pd.DataFrame:
 def quick_eval(env: TradingEnv, agent: TinyDQN) -> float:
     """Run a fast evaluation episode and return final equity."""
 
-    eval_env = TradingEnv(env.df)
+    eval_env = TradingEnv(env.df, cfg=env.cfg)
     obs, _ = eval_env.reset()
     done = False
     while not done:
@@ -296,7 +296,8 @@ def main() -> None:
     cfg = load_config(args.config)
     ensure_dirs_exist(cfg)
     df = load_data(cfg, args.data, args.timesteps)
-    env = TradingEnv(df)
+    env = TradingEnv(df, cfg=cfg)
+    print(f"Using fees: {cfg.get('fees', {})}")
 
     paths = cfg.get("paths", {})
     logs_dir = paths.get("logs_dir", "logs")

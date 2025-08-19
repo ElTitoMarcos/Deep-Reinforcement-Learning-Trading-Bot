@@ -35,10 +35,12 @@ def main():
         df = load_table(path)
 
     pol = get_policy(args.policy)
+    fee = cfg.get("fees", {}).get("taker", 0.001)
+    print(f"Using fees: {cfg.get('fees', {})}")
     sim = simulate(
         df,
         pol,
-        fees=cfg.get("fees", {}).get("taker", 0.001),
+        fees=fee,
         slippage=cfg.get("slippage", 0.0005),
         min_notional_usd=cfg.get("min_notional_usd", 10.0),
         tick_size=cfg.get("filters", {}).get("tickSize", 0.01),
