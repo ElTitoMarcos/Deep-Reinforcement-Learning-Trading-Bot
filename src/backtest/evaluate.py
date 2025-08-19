@@ -7,6 +7,7 @@ from ..policies.hybrid import HybridPolicy
 from ..utils.data_io import load_table
 from ..utils.config import load_config
 from ..utils.paths import get_raw_dir, get_reports_dir, ensure_dirs_exist
+from ..reports.human_friendly import write_readme
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
 from datetime import datetime, timezone
@@ -129,6 +130,9 @@ def main():
     # save metrics
     with open(run_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
+
+    # human friendly README
+    write_readme(metrics, run_dir)
 
     # save trades
     pd.DataFrame(trades).to_csv(run_dir / "trades.csv", index=False)
