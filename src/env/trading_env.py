@@ -25,7 +25,6 @@ class _Space:
     shape: Tuple[int, ...]
     dtype: Any = np.float32
 
-
 @dataclass
 class _Discrete:
     """Minimal discrete space (``n`` possible integer actions)."""
@@ -60,7 +59,6 @@ class TradingEnv:
         self.action_space = _Discrete(3, np.int64)
         # in the future this could include a continuous component (0..1)
         # to express position sizing alongside the discrete action
-
         # config ---------------------------------------------------------
         with open("configs/default.yaml", "r", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
@@ -185,6 +183,7 @@ class TradingEnv:
             self.trailing_stop = None
             self.entry_price = None
             trade = True
+
         # TODO: support a continuous size component (0..1) alongside the
         # discrete action for finer trade management
 
