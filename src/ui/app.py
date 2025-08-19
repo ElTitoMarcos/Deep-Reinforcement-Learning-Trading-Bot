@@ -494,8 +494,8 @@ if st.button("📈 Evaluar"):
             latest = run_dirs[0]
             try:
                 with open(latest / "metrics.json") as f:
-                    metrics = json.load(f)
-                render_panel(metrics)
+                    results = json.load(f)
+                render_panel(results)
                 st.caption(f"Resumen guardado en {latest}")
             except Exception as err:
                 st.error(f"No se pudo leer métricas: {err}")
