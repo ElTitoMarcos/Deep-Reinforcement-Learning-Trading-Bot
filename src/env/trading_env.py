@@ -16,6 +16,8 @@ import pandas as pd
 import yaml
 import logging
 
+from ..exchange.binance_meta import BinanceMeta
+
 try:  # pragma: no cover - optional gym dependency
     import gymnasium as gym
     from gymnasium import spaces
@@ -63,6 +65,9 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         df: pd.DataFrame,
         orderbook_hook: Callable[[int], Dict[str, Any]] | None = None,
         *,
+        cfg: dict | None = None,
+        symbol: str | None = None,
+        meta: BinanceMeta | None = None,
         max_trades_per_window: int | None = None,
         trade_window_seconds: float = 0.0,
         trade_cooldown_seconds: float = 0.0,
@@ -95,8 +100,10 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         # in the future this could include a continuous component (0..1)
         # to express position sizing alongside the discrete action
         # config ---------------------------------------------------------
-        with open("configs/default.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+        if cfg is None:
+            with open("configs/default.yaml", "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+        self.cfg = cfg
         fees = cfg.get("fees", {})
         self.fee_rate = float(fees.get("taker", 0.0))
         rw = cfg.get("reward_weights", {})
@@ -105,6 +112,22 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         self.w_dd = float(rw.get("dd", 0.0))
         self.w_vol = float(rw.get("vol", 0.0))
 
+        self.meta = meta
+        self.symbol = symbol
+        f_cfg = cfg.get("filters", {})
+        self._tick_size = float(f_cfg.get("tickSize", 0.0))
+        self._step_size = float(f_cfg.get("stepSize", 1.0))
+        self._min_notional = float(cfg.get("min_notional_usd", 0.0))
+        self.position_size = 0.0
+        if self.meta and self.symbol:
+            try:
+                filt = self.meta.get_symbol_filters(self.symbol)
+                self._tick_size = float(filt.get("tickSize", self._tick_size))
+                self._step_size = float(filt.get("stepSize", self._step_size))
+                self._min_notional = float(filt.get("minNotional", self._min_notional))
+            except Exception:  # pragma: no cover - network issues
+                pass
+
         # environment timing and trade limits ----------------------------
         self.step_seconds = float(cfg.get("step_seconds", 60))
         self.max_trades_per_window = max_trades_per_window
@@ -112,6 +135,20 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         self.trade_cooldown_seconds = float(trade_cooldown_seconds)
         self._trade_times: deque[float] = deque()
         self._last_trade_time: float | None = None
+
+    # ------------------------------------------------------------------
+    def set_symbol(self, symbol: str) -> None:
+        """Update the active *symbol* and reload exchange filters."""
+
+        self.symbol = symbol
+        if self.meta:
+            try:
+                filt = self.meta.get_symbol_filters(symbol)
+                self._tick_size = float(filt.get("tickSize", self._tick_size))
+                self._step_size = float(filt.get("stepSize", self._step_size))
+                self._min_notional = float(filt.get("minNotional", self._min_notional))
+            except Exception:  # pragma: no cover - network issues
+                pass
 
     # ------------------------------------------------------------------
     def _make_observation(self, step: int) -> np.ndarray:
@@ -234,6 +271,7 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         self.in_position = False
         self.trailing_stop = None
         self.entry_price = None
+        self.position_size = 0.0
         self.equity = 0.0
         self.equity_peak = 0.0
         self._feature_histories = [[] for _ in range(8)]
@@ -277,21 +315,59 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         if action == 1 and not self.in_position:
             attempted_trade = True
             if can_trade():
-                self.in_position = True
-                self.trailing_stop = prev_price
-                self.entry_price = prev_price
-                fee = prev_price * self.fee_rate
-                self.equity -= fee
-                trade = True
+                price = prev_price
+                if self._tick_size > 0:
+                    price = round(price / self._tick_size) * self._tick_size
+                qty = 1.0
+                if self._step_size > 0:
+                    qty = round(qty / self._step_size) * self._step_size
+                value = price * qty
+                logger.info(
+                    "open_order price=%.8f qty=%.8f value=%.8f tick=%.8f step=%.8f", 
+                    price, qty, value, self._tick_size, self._step_size,
+                )
+                if value < self._min_notional:
+                    logger.info(
+                        "Trade blocked: value %.8f < minNotional %.8f",
+                        value,
+                        self._min_notional,
+                    )
+                else:
+                    self.in_position = True
+                    self.position_size = qty
+                    self.trailing_stop = price
+                    self.entry_price = price
+                    fee = value * self.fee_rate
+                    self.equity -= fee
+                    trade = True
         elif action == 2 and self.in_position:
             attempted_trade = True
             if can_trade():
-                fee = prev_price * self.fee_rate
-                self.equity += (prev_price - self.entry_price) - fee
-                self.in_position = False
-                self.trailing_stop = None
-                self.entry_price = None
-                trade = True
+                price = prev_price
+                if self._tick_size > 0:
+                    price = round(price / self._tick_size) * self._tick_size
+                qty = self.position_size if self.position_size > 0 else 1.0
+                if self._step_size > 0:
+                    qty = round(qty / self._step_size) * self._step_size
+                value = price * qty
+                logger.info(
+                    "close_order price=%.8f qty=%.8f value=%.8f tick=%.8f step=%.8f",
+                    price, qty, value, self._tick_size, self._step_size,
+                )
+                if value < self._min_notional:
+                    logger.info(
+                        "Trade blocked: value %.8f < minNotional %.8f",
+                        value,
+                        self._min_notional,
+                    )
+                else:
+                    fee = value * self.fee_rate
+                    self.equity += (price - self.entry_price) * qty - fee
+                    self.in_position = False
+                    self.position_size = 0.0
+                    self.trailing_stop = None
+                    self.entry_price = None
+                    trade = True
 
         if trade:
             self._last_trade_time = now
@@ -307,7 +383,7 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         price = self._close[self.current_step]
 
         if self.in_position:
-            self.equity += price - prev_price
+            self.equity += (price - prev_price) * self.position_size
             if self.trailing_stop is not None:
                 self.trailing_stop = max(self.trailing_stop, price)
 
