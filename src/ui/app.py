@@ -305,7 +305,6 @@ if st.button("Obtener y validar datos"):
         discover_symbols(ex, top_n=5)
     except Exception:
         pass
-
     if invalid_syms:
         st.warning(
             "Ignorando símbolos inválidos: "
