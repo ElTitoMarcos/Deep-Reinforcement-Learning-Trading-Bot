@@ -2,10 +2,9 @@ from __future__ import annotations
 
 """Helpers to ensure OHLCV data availability."""
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 import time
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -18,7 +17,6 @@ def ensure_ohlcv(
     timeframe: str,
     *,
     hours: int = 24,
-    root: Optional[Path | str] = None,
 ) -> Path:
     """Ensure a parquet file with OHLCV data exists and return its path.
 
@@ -27,7 +25,7 @@ def ensure_ohlcv(
     rate limits.  When downloading fails a ``RuntimeError`` is raised.
     """
 
-    path = raw_parquet_path(exchange, symbol, timeframe, root)
+    path = raw_parquet_path(exchange, symbol, timeframe)
     if path.exists():
         return path
 
@@ -39,9 +37,9 @@ def ensure_ohlcv(
     ex_class = getattr(ccxt, exchange)
     ex = ex_class({"enableRateLimit": True})
 
-    since = int((datetime.utcnow() - timedelta(hours=hours)).timestamp() * 1000)
+    since = int((datetime.now(UTC) - timedelta(hours=hours)).timestamp() * 1000)
     tf_ms = ex.parse_timeframe(timeframe) * 1000
-    now_ms = int(datetime.utcnow().timestamp() * 1000)
+    now_ms = int(datetime.now(UTC).timestamp() * 1000)
 
     rows: list[list[float]] = []
     while since < now_ms:

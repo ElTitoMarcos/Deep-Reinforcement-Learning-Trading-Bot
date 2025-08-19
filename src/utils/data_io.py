@@ -4,6 +4,8 @@ import os
 import numpy as np
 import pandas as pd
 
+from .paths import raw_parquet_path, posix
+
 REQUIRED_OHLCV_COLUMNS = [
     "ts",
     "open",
@@ -188,9 +190,8 @@ def validate_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def save_ohlcv(df: pd.DataFrame, root: str, exchange: str, symbol: str, timeframe: str) -> str:
+def save_ohlcv(df: pd.DataFrame, exchange: str, symbol: str, timeframe: str) -> str:
     df = validate_ohlcv(df)
-    sym_fs = symbol.replace("/", "_")
-    path = os.path.join(root, exchange, sym_fs, f"{timeframe}.parquet")
-    save_table(df, path)
-    return path
+    path = raw_parquet_path(exchange, symbol, timeframe)
+    save_table(df, posix(path))
+    return posix(path)

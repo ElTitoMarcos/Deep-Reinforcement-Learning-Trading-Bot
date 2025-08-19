@@ -3,7 +3,7 @@ from datetime import datetime, UTC
 import streamlit as st
 
 from src.utils.config import load_config
-from src.utils.paths import ensure_dirs_exist, get_raw_dir, get_reports_dir
+from src.utils import paths
 from src.reports.human_friendly import render_panel
 from src.utils.device import get_device, set_cpu_threads
 from src.data.ccxt_loader import get_exchange, save_history
@@ -53,13 +53,13 @@ with st.sidebar:
     # Cargar YAML
     try:
         cfg = load_config(CONFIG_PATH)
-        ensure_dirs_exist(cfg)
+        paths.ensure_dirs_exist()
     except Exception as e:
         st.error(f"No se pudo cargar {CONFIG_PATH}: {e}")
         cfg = {}
 
     paths_cfg = cfg.get("paths", {})
-    raw_dir = get_raw_dir(cfg)
+    raw_dir = paths.RAW_DIR
     use_testnet_default = bool(cfg.get("binance_use_testnet", False))
     mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
     use_testnet = mode == "Testnet"
@@ -359,7 +359,7 @@ if st.button("Obtener y validar datos"):
                     data_file = "ohlcv.csv"
             manifest = {
                 "symbol": sym,
-                "obtained_at": datetime.utcnow().isoformat(),
+                "obtained_at": datetime.now(UTC).isoformat(),
                 "source": meta.get("source"),
                 "qc": summary,
                 "data_file": data_file,
@@ -376,6 +376,36 @@ st.subheader("📥 Datos")
 st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
 st.write("Construyendo dataset con tramos de alta actividad...")
 st.write("Seleccionados: " + ", ".join(selected_symbols))
+if st.button("🔄 Actualizar datos"):
+    from datetime import datetime, UTC, timedelta
+    import json
+    from src.data.incremental import (
+        last_watermark,
+        fetch_ohlcv_incremental,
+        upsert_parquet,
+    )
+
+    ex = get_exchange(use_testnet=use_testnet)
+    tf_str = cfg.get("timeframe", "1m")
+    for sym in selected_symbols:
+        since = last_watermark(sym, tf_str)
+        if since is None:
+            since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
+        df_new = fetch_ohlcv_incremental(ex, sym, tf_str, since_ms=since)
+        if df_new.empty:
+            st.info(f"{sym}: sin datos nuevos")
+            continue
+        path = paths.raw_parquet_path(ex.id if hasattr(ex, "id") else "binance", sym, tf_str)
+        upsert_parquet(df_new, path)
+        manifest = {
+            "symbol": sym,
+            "timeframe": tf_str,
+            "watermark": int(df_new["ts"].max()),
+            "obtained_at": datetime.now(UTC).isoformat(),
+        }
+        with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        st.success(f"{sym} actualizado")
 if st.button("⬇️ Descargar histórico"):
     from datetime import datetime
     import pandas as pd
@@ -407,7 +437,6 @@ if st.button("⬇️ Descargar histórico"):
                     sym,
                     tf_str,
                     hours=lookback_h,
-                    root=raw_dir,
                 )
                 df = pd.read_parquet(path)
                 parts = [df[(df.ts >= s) & (df.ts < e)] for s, e in windows]
@@ -417,7 +446,7 @@ if st.button("⬇️ Descargar histórico"):
                     cfg["timeframe"] = tf
                     out = save_history(
                         merged,
-                        str(raw_dir),
+                        paths.RAW_DIR,
                         ex.id if hasattr(ex, "id") else "binance",
                         sym,
                         tf,
@@ -494,7 +523,7 @@ if st.button("📈 Evaluar"):
         if logs:
             st.expander("Logs").code(logs, language="bash")
 
-        reports_root = get_reports_dir(cfg)
+          reports_root = paths.reports_dir()
         run_dirs = sorted(reports_root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
         if run_dirs:
             latest = run_dirs[0]
