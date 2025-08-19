@@ -15,6 +15,9 @@ __all__ = [
     "validate_trades",
     "passes",
     "summarize",
+    "start_refresh_worker",
+    "stop_refresh_worker",
+    "dataset_updated",
 ]
 
 from .ccxt_loader import (  # noqa: E402
@@ -34,4 +37,5 @@ from .quality import (
     passes,
     summarize,
 )
+from .refresh_worker import start_refresh_worker, stop_refresh_worker, dataset_updated
 
