@@ -532,6 +532,35 @@ def main() -> None:
 
     cfg = load_config(args.config)
     paths.ensure_dirs_exist()
+    if args.continuous and not args.data:
+        from datetime import datetime, timedelta, timezone
+        from ..data.incremental import (
+            last_watermark,
+            fetch_ohlcv_incremental,
+            upsert_parquet,
+        )
+        from ..data.ccxt_loader import get_exchange
+
+        ex = get_exchange(use_testnet=cfg.get("binance_use_testnet"))
+        timeframe = cfg.get("timeframe", "1m")
+        for sym in cfg.get("symbols", []):
+            since = last_watermark(sym, timeframe)
+            if since is None:
+                since = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+            df_new = fetch_ohlcv_incremental(ex, sym, timeframe, since_ms=since)
+            if df_new.empty:
+                continue
+            path = paths.raw_parquet_path(ex.id if hasattr(ex, "id") else "binance", sym, timeframe)
+            upsert_parquet(df_new, path)
+            manifest = {
+                "symbol": sym,
+                "timeframe": timeframe,
+                "watermark": int(df_new["ts"].max()),
+                "obtained_at": datetime.utcnow().isoformat(),
+            }
+            with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+                
     df = load_data(cfg, args.data, args.timesteps)
     env = TradingEnv(df, cfg=cfg)
     print(f"Using fees: {cfg.get('fees', {})}")

@@ -376,6 +376,36 @@ st.subheader("📥 Datos")
 st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
 st.write("Construyendo dataset con tramos de alta actividad...")
 st.write("Seleccionados: " + ", ".join(selected_symbols))
+if st.button("🔄 Actualizar datos"):
+    from datetime import datetime, timedelta, timezone
+    import json
+    from src.data.incremental import (
+        last_watermark,
+        fetch_ohlcv_incremental,
+        upsert_parquet,
+    )
+
+    ex = get_exchange(use_testnet=use_testnet)
+    tf_str = cfg.get("timeframe", "1m")
+    for sym in selected_symbols:
+        since = last_watermark(sym, tf_str)
+        if since is None:
+            since = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+        df_new = fetch_ohlcv_incremental(ex, sym, tf_str, since_ms=since)
+        if df_new.empty:
+            st.info(f"{sym}: sin datos nuevos")
+            continue
+        path = paths.raw_parquet_path(ex.id if hasattr(ex, "id") else "binance", sym, tf_str)
+        upsert_parquet(df_new, path)
+        manifest = {
+            "symbol": sym,
+            "timeframe": tf_str,
+            "watermark": int(df_new["ts"].max()),
+            "obtained_at": datetime.utcnow().isoformat(),
+        }
+        with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
+        st.success(f"{sym} actualizado")
 if st.button("⬇️ Descargar histórico"):
     from datetime import datetime
     import pandas as pd
