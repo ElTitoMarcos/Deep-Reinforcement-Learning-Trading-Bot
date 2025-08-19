@@ -53,6 +53,7 @@ from src.training.train_drl import (
     train_ppo_sb3,
 )
 from src.policies.value_based import ValueBasedPolicy
+from src.utils.device import get_device, set_cpu_threads
 
 
 # ---------------------------------------------------------------------------
@@ -131,6 +132,18 @@ def main() -> None:
 
     paths = cfg.get("paths", {})
     ckpt_dir = paths.get("checkpoints_dir", "checkpoints")
+
+    device = get_device()
+    if device == "cuda":
+        import torch  # local import to avoid requiring torch with CUDA in tests
+
+        name = torch.cuda.get_device_name(0)
+        print(f"Using device: CUDA ({name})")
+    else:
+        threads = set_cpu_threads()
+        print(f"Using device: CPU ({threads} threads)")
+    cfg.setdefault("dqn", {})["device"] = device
+    cfg.setdefault("ppo", {})["device"] = device
 
     if args.algo == "dqn":
         model_path = train_value_dqn(env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=0)

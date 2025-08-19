@@ -23,9 +23,16 @@ class HybridPolicy:
     initial_weights : Dict[str, float]
         Starting weights for each policy. Missing entries default to uniform
         values.
+    block_size : int, optional
+        Number of trades after which weights are refreshed. Defaults to 100.
     """
 
-    def __init__(self, policies: Dict[str, Any], initial_weights: Dict[str, float]):
+    def __init__(
+        self,
+        policies: Dict[str, Any],
+        initial_weights: Dict[str, float],
+        block_size: int = 100,
+    ):
         self.policies = policies
         if not policies:
             raise ValueError("At least one policy is required")
@@ -36,6 +43,28 @@ class HybridPolicy:
         self.weights = {k: float(w) for k, w in zip(policies, weights)}
         # store history for analysis/regularisation
         self.metrics_history: list[Dict[str, Any]] = []
+        self.block_size = int(block_size)
+        self._pending: list[Dict[str, Dict[str, float]]] = []
+
+    # ------------------------------------------------------------------
+    def record_trade(self, metrics: Dict[str, Dict[str, float]]) -> None:
+        """Accumulate trade metrics and update weights every ``block_size`` trades."""
+
+        self._pending.append(metrics)
+        if len(self._pending) >= self.block_size:
+            agg: Dict[str, Dict[str, float]] = {}
+            for m in self._pending:
+                for name, vals in m.items():
+                    entry = agg.setdefault(name, {"pnl": 0.0, "max_drawdown": 0.0, "n": 0})
+                    entry["pnl"] += float(vals.get("pnl", 0.0))
+                    entry["max_drawdown"] += float(vals.get("max_drawdown", 0.0))
+                    entry["n"] += 1
+            averaged = {
+                k: {"pnl": v["pnl"] / max(v["n"], 1), "max_drawdown": v["max_drawdown"] / max(v["n"], 1)}
+                for k, v in agg.items()
+            }
+            self.update_weights(averaged)
+            self._pending.clear()
 
     # ------------------------------------------------------------------
     def act(self, obs: np.ndarray) -> int:
