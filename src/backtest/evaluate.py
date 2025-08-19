@@ -7,7 +7,7 @@ from ..utils.data_io import load_table, ensure_dir
 from ..utils.config import load_config
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 import matplotlib.pyplot as plt
 
 def main():
@@ -62,7 +62,7 @@ def main():
     )
 
     reports_root = paths.get("reports_dir", "reports")
-    run_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_dir = os.path.join(reports_root, run_id)
     ensure_dir(run_dir)
 

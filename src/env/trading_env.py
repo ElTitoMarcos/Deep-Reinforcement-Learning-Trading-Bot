@@ -16,27 +16,48 @@ import pandas as pd
 import yaml
 import logging
 
+try:  # pragma: no cover - optional gym dependency
+    import gymnasium as gym
+    from gymnasium import spaces
+except Exception:  # pragma: no cover - optional gym dependency
+    try:
+        import gym
+        from gym import spaces  # type: ignore[no-redef]
+    except Exception:  # pragma: no cover - fallback when gym is unavailable
+        gym = None  # type: ignore[assignment]
+
+        @dataclass
+        class _Space:
+            """Simple stand-in for a gym ``Space`` object."""
+
+            shape: Tuple[int, ...]
+            dtype: Any = np.float32
+
+        @dataclass
+        class _Discrete:
+            """Minimal discrete space (``n`` possible integer actions)."""
+
+            n: int
+            dtype: Any = np.int64
+
+        def _box(*, low: Any, high: Any, shape: Tuple[int, ...], dtype: Any = np.float32) -> _Space:
+            return _Space(shape, dtype)
+
+        def _discrete(n: int, dtype: Any = np.int64) -> _Discrete:
+            return _Discrete(n, dtype)
+
+        class _Spaces:  # minimal module-like container
+            Box = staticmethod(_box)
+            Discrete = staticmethod(_discrete)
+
+        spaces = _Spaces()  # type: ignore[assignment]
+
 from ..utils.orderbook import compute_walls, distancia_a_muralla
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class _Space:
-    """Simple stand-in for a gym ``Space`` object."""
-
-    shape: Tuple[int, ...]
-    dtype: Any = np.float32
-
-@dataclass
-class _Discrete:
-    """Minimal discrete space (``n`` possible integer actions)."""
-
-    n: int
-    dtype: Any = np.int64
-
-
-class TradingEnv:
+class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
     def __init__(
         self,
         df: pd.DataFrame,
@@ -66,9 +87,11 @@ class TradingEnv:
         self._feature_histories: List[List[float]] = [[] for _ in range(8)]
 
         # observation space: 8 engineered features, float32
-        self.observation_space = _Space((8,), np.float32)
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+        )
         # discrete action space: 0=hold, 1=open_long, 2=close
-        self.action_space = _Discrete(3, np.int64)
+        self.action_space = spaces.Discrete(3)
         # in the future this could include a continuous component (0..1)
         # to express position sizing alongside the discrete action
         # config ---------------------------------------------------------
@@ -182,7 +205,31 @@ class TradingEnv:
         return np.asarray(scaled_features, dtype=np.float32)
 
     # public API -------------------------------------------------------
-    def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: Dict[str, Any] | None = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Reset environment state.
+
+        Parameters
+        ----------
+        seed: int | None
+            Optional random seed for compatibility with Gym/Gymnasium.
+        options: Dict[str, Any] | None
+            Currently ignored, present for API completeness.
+        """
+
+        if seed is not None:
+            try:  # pragma: no cover - seeding not critical for logic
+                if hasattr(super(), "reset"):
+                    super().reset(seed=seed)  # type: ignore[misc]
+                else:
+                    np.random.seed(seed)
+            except TypeError:
+                np.random.seed(seed)
+
         self.current_step = 0
         self.in_position = False
         self.trailing_stop = None
