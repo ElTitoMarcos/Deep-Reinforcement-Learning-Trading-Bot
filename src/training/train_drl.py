@@ -142,7 +142,6 @@ def quick_eval(env: TradingEnv, agent: TinyDQN) -> float:
         obs, _, done, _, _ = eval_env.step(action)
     return float(eval_env.equity)
 
-
 # ---------------------------------------------------------------------------
 # Model IO helpers ----------------------------------------------------------
 
@@ -167,7 +166,6 @@ def load_model(path: str, cfg: dict) -> ValueBasedPolicy:
     policy = ValueBasedPolicy(obs_dim=meta["obs_dim"], n_actions=meta["n_actions"], config=cfg)
     policy.load_model(path)
     return policy
-
 
 def train_value_dqn(
     env: TradingEnv,
@@ -205,6 +203,7 @@ def train_value_dqn(
 
     symbol = (cfg.get("symbols") or ["UNK"])[0].replace("/", "-")
     final_path = save_model(agent, "dqn", symbol)
+
     return final_path
 
 
