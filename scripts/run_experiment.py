@@ -36,6 +36,7 @@ import pandas as pd
 
 from src.utils.config import load_config
 from src.utils.data_io import ensure_dir, load_table, save_table
+from src.utils import paths
 from src.env.trading_env import TradingEnv
 from src.backtest.simulator import simulate
 from src.backtest.metrics import (
@@ -82,16 +83,13 @@ def ensure_price_data(cfg: dict, timesteps: int) -> pd.DataFrame:
     the network is intentionally avoided to keep tests fast and hermetic.
     """
 
-    paths = cfg.get("paths", {})
-    raw_dir = paths.get("raw_dir", "data/raw")
     exchange = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     timeframe = cfg.get("timeframe", "1m")
-    sym_fs = symbol.replace("/", "-")
-    fname = os.path.join(raw_dir, exchange, sym_fs, f"{timeframe}.parquet")
+    fname = paths.raw_parquet_path(exchange, symbol, timeframe)
 
-    if os.path.exists(fname):
-        return load_table(fname)
+    if fname.exists():
+        return load_table(paths.posix(fname))
 
     # Fallback to synthetic data generation used in the training smoke tests.
     df = _load_data(cfg, None, timesteps)
@@ -99,12 +97,12 @@ def ensure_price_data(cfg: dict, timesteps: int) -> pd.DataFrame:
     df["symbol"] = symbol
     df["timeframe"] = timeframe
     df["source"] = "synthetic"
-    ensure_dir(os.path.dirname(fname))
+    ensure_dir(paths.posix(fname.parent))
     try:
-        save_table(df, fname)
+        save_table(df, paths.posix(fname))
     except Exception:  # parquet engine missing -> store as CSV instead
-        csv_path = os.path.splitext(fname)[0] + ".csv"
-        save_table(df, csv_path)
+        csv_path = fname.with_suffix(".csv")
+        save_table(df, paths.posix(csv_path))
     return df
 
 
@@ -130,8 +128,8 @@ def main() -> None:
     df = ensure_price_data(cfg, args.timesteps)
     env = TradingEnv(df)
 
-    paths = cfg.get("paths", {})
-    ckpt_dir = paths.get("checkpoints_dir", "checkpoints")
+    paths.ensure_dirs_exist()
+    ckpt_dir = paths.checkpoints_dir()
 
     device = get_device()
     if device == "cuda":
@@ -146,7 +144,7 @@ def main() -> None:
     cfg.setdefault("ppo", {})["device"] = device
 
     if args.algo == "dqn":
-        model_path = train_value_dqn(env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=0)
+        model_path = train_value_dqn(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), checkpoint_freq=0)
         policy = ValueBasedPolicy(
             int(env.observation_space.shape[0]),
             int(env.action_space.n),
@@ -156,7 +154,7 @@ def main() -> None:
     else:  # args.algo == "ppo"
         if not has_sb3():  # pragma: no cover - heavy optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        model_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
+        model_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir))
         from stable_baselines3 import PPO  # pragma: no cover - optional dependency
 
         sb3_model = PPO.load(model_path)
@@ -182,10 +180,10 @@ def main() -> None:
         slippage_depth=int(cfg.get("slippage_depth", 50)),
     )
 
-    reports_root = paths.get("reports_dir", "reports")
+    reports_root = paths.reports_dir()
     exp_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-    run_dir = os.path.join(reports_root, exp_id)
-    ensure_dir(run_dir)
+    run_dir = reports_root / exp_id
+    ensure_dir(paths.posix(run_dir))
 
     equity_curve = (1.0 + sim["returns"]).cumprod()
     metrics = {
@@ -198,11 +196,11 @@ def main() -> None:
         "equity_final": sim["equity"],
     }
 
-    with open(os.path.join(run_dir, "metrics.json"), "w", encoding="utf-8") as fh:
+    with open(run_dir / "metrics.json", "w", encoding="utf-8") as fh:
         json.dump(metrics, fh, indent=2)
 
-    pd.DataFrame(sim["trades"]).to_csv(os.path.join(run_dir, "trades.csv"), index=False)
-    equity_curve.to_csv(os.path.join(run_dir, "equity.csv"), index_label="idx", header=["equity"])
+    pd.DataFrame(sim["trades"]).to_csv(run_dir / "trades.csv", index=False)
+    equity_curve.to_csv(run_dir / "equity.csv", index_label="idx", header=["equity"])
 
     try:  # pragma: no cover - matplotlib not essential in tests
         import matplotlib.pyplot as plt
@@ -213,12 +211,12 @@ def main() -> None:
         plt.xlabel("trade")
         plt.ylabel("equity")
         plt.tight_layout()
-        plt.savefig(os.path.join(run_dir, "equity.png"))
+          plt.savefig(run_dir / "equity.png")
         plt.close()
     except Exception:
         pass
 
-    print(f"Experiment artifacts saved to {run_dir}")
+    print(f"Experiment artifacts saved to {paths.posix(run_dir)}")
 
 
 if __name__ == "__main__":  # pragma: no cover

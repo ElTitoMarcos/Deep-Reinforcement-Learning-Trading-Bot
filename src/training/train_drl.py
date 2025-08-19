@@ -22,6 +22,7 @@ import json
 from dataclasses import dataclass
 from typing import Tuple
 from datetime import datetime
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -31,12 +32,7 @@ from ..auto.hparam_tuner import tune
 from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger, config_hash
-from ..utils.paths import (
-    get_raw_dir,
-    get_checkpoints_dir,
-    ensure_dirs_exist,
-    get_reports_dir,
-)
+from ..utils import paths
 from ..utils.device import get_device, set_cpu_threads
 from ..policies.value_based import ValueBasedPolicy
 from ..llm import LLMClient, SYSTEM_PROMPT, build_periodic_prompt
@@ -122,14 +118,13 @@ def load_data(cfg: dict, data_path: str | None, timesteps: int) -> pd.DataFrame:
     if data_path:
         return load_table(data_path)
 
-    raw_dir = get_raw_dir(cfg)
     exchange = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     timeframe = cfg.get("timeframe", "1m")
-    fname = raw_dir / exchange / symbol.replace("/", "-") / f"{timeframe}.parquet"
+    fname = paths.raw_parquet_path(exchange, symbol, timeframe)
 
     if fname.exists():  # pragma: no branch - depends on repo data
-        return load_table(fname)
+        return load_table(paths.posix(fname))
 
     # generate simple random walk prices
     n = max(timesteps + 1, 1_000)
@@ -195,11 +190,11 @@ def save_model(agent: ValueBasedPolicy, algo: str, symbol: str) -> str:
     """Persist a trained policy to the models directory with metadata."""
     ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
     fname = f"{ts}_{algo}_{symbol}.pt"
-    models_dir = "models"
-    os.makedirs(models_dir, exist_ok=True)
-    path = os.path.join(models_dir, fname)
-    agent.save_model(path)
-    return path
+    models_dir = Path("models")
+    models_dir.mkdir(exist_ok=True)
+    path = models_dir / fname
+    agent.save_model(paths.posix(path))
+    return paths.posix(path)
 
 
 def load_model(path: str, cfg: dict) -> ValueBasedPolicy:
@@ -237,7 +232,7 @@ def train_value_dqn(
     llm_every = int(llm_cfg.get("every_n") or 0)
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
-        reports_dir = get_reports_dir(cfg)
+        reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
         llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
 
@@ -274,10 +269,10 @@ def train_value_dqn(
             )
 
         if checkpoint_freq and episode % checkpoint_freq == 0:
-            ckpt = os.path.join(outdir, f"vdqn_ep{episode}.pt")
-            agent.save_model(ckpt)
+            ckpt = Path(outdir) / f"vdqn_ep{episode}.pt"
+            agent.save_model(paths.posix(ckpt))
 
-    symbol = (cfg.get("symbols") or ["UNK"])[0].replace("/", "-")
+    symbol = paths.symbol_to_dir((cfg.get("symbols") or ["UNK"])[0])
     final_path = save_model(agent, "dqn", symbol)
     if llm_file:
         llm_file.close()
@@ -314,7 +309,7 @@ def train_dqn(
     llm_every = int(llm_cfg.get("every_n") or 0)
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
-        reports_dir = get_reports_dir(cfg)
+        reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
         llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
 
@@ -355,24 +350,24 @@ def train_dqn(
             )
 
         if checkpoint_freq and episode % checkpoint_freq == 0:
-            ckpt = os.path.join(outdir, f"dqn_ep{episode}.npz")
-            agent.save(ckpt)
+            ckpt = Path(outdir) / f"dqn_ep{episode}.npz"
+            agent.save(paths.posix(ckpt))
             equity = quick_eval(env, agent)
             print(f"[checkpoint] episode={episode} equity={equity:.2f}")
 
-    final_path = os.path.join(outdir, "dqn_final.npz")
-    agent.save(final_path)
+    final_path = Path(outdir) / "dqn_final.npz"
+    agent.save(paths.posix(final_path))
     meta = {
         "algo": "dqn",
         "timesteps": timesteps,
         "checkpoint_freq": checkpoint_freq,
     }
     os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "dqn_meta.json"), "w", encoding="utf-8") as fh:
+    with open(Path(outdir) / "dqn_meta.json", "w", encoding="utf-8") as fh:
         json.dump(meta, fh)
     if llm_file:
         llm_file.close()
-    return final_path
+    return paths.posix(final_path)
 
 
 # ---------------------------------------------------------------------------
@@ -392,9 +387,9 @@ def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str, devic
         device=device,
     )
     model.learn(total_timesteps=timesteps)
-    path = os.path.join(outdir, "ppo_model.zip")
-    model.save(path)
-    return path
+    path = Path(outdir) / "ppo_model.zip"
+    model.save(paths.posix(path))
+    return paths.posix(path)
 
 
 # ---------------------------------------------------------------------------
@@ -412,15 +407,15 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
-    ensure_dirs_exist(cfg)
+    paths.ensure_dirs_exist()
     df = load_data(cfg, args.data, args.timesteps)
     env = TradingEnv(df, cfg=cfg)
     print(f"Using fees: {cfg.get('fees', {})}")
 
-    paths = cfg.get("paths", {})
-    logs_dir = paths.get("logs_dir", "logs")
+    paths_cfg = cfg.get("paths", {})
+    logs_dir = paths_cfg.get("logs_dir", "logs")
     os.makedirs(logs_dir, exist_ok=True)
-    logger = ensure_logger(os.path.join(logs_dir, "train.jsonl"))
+    logger = ensure_logger(paths.posix(Path(logs_dir) / "train.jsonl"))
     logger.log(
         "INFO",
         "env_ready",
@@ -466,13 +461,13 @@ def main() -> None:
         cfg["dqn"] = params
         logger.log("INFO", "hparams", algo="dqn", params=params)
 
-    ckpt_dir = str(get_checkpoints_dir(cfg))
+    ckpt_dir = paths.checkpoints_dir()
     if algo_key == "dqn":
         out = train_value_dqn(
             env,
             cfg,
             args.timesteps,
-            outdir=ckpt_dir,
+            outdir=paths.posix(ckpt_dir),
             checkpoint_freq=args.checkpoint_freq,
             logger=logger,
         )
@@ -481,23 +476,23 @@ def main() -> None:
             env,
             cfg,
             args.timesteps,
-            outdir=ckpt_dir,
+            outdir=paths.posix(ckpt_dir),
             checkpoint_freq=args.checkpoint_freq,
             logger=logger,
         )
     elif algo_key == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir, device=device)
+        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device)
     elif algo_key == "hybrid":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir, device=device)
+        ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device)
         dqn_path = train_value_dqn(
             env,
             cfg,
             args.timesteps,
-            outdir=ckpt_dir,
+            outdir=paths.posix(ckpt_dir),
             checkpoint_freq=args.checkpoint_freq,
             logger=logger,
         )

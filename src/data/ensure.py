@@ -5,7 +5,6 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 import time
 from pathlib import Path
-from typing import Optional
 
 import pandas as pd
 
@@ -18,7 +17,6 @@ def ensure_ohlcv(
     timeframe: str,
     *,
     hours: int = 24,
-    root: Optional[Path | str] = None,
 ) -> Path:
     """Ensure a parquet file with OHLCV data exists and return its path.
 
@@ -27,7 +25,7 @@ def ensure_ohlcv(
     rate limits.  When downloading fails a ``RuntimeError`` is raised.
     """
 
-    path = raw_parquet_path(exchange, symbol, timeframe, root)
+    path = raw_parquet_path(exchange, symbol, timeframe)
     if path.exists():
         return path
 
