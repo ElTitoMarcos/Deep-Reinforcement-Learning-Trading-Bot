@@ -84,20 +84,29 @@ with st.sidebar:
     fees_dict = cfg.get("fees", {})
     fees_maker = st.number_input("Fee maker", value=float(fees_dict.get("maker",0.001)), step=0.0001, format="%.6f", key="fee_maker")
     fees_taker = st.number_input("Fee taker", value=float(fees_dict.get("taker",0.001)), step=0.0001, format="%.6f", key="fee_taker")
-    if st.button("Actualizar comisiones"):
-        load_dotenv()
-        api_key = os.getenv("BINANCE_API_KEY")
-        api_secret = os.getenv("BINANCE_API_SECRET")
-        try:
-            meta = BinanceMeta(api_key, api_secret, use_testnet)
-            fee_map = meta.get_account_trade_fees()
-            symbol_key = (selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map)))
-            entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
-            st.session_state["fee_maker"] = entry.get("maker", fees_maker)
-            st.session_state["fee_taker"] = entry.get("taker", fees_taker)
-            st.success(f"Maker {entry.get('maker',0)} | Taker {entry.get('taker',0)}")
-        except Exception as e:
-            st.error(f"No se pudo obtener: {e}")
+    btn_col, origin_col = st.columns([1, 1])
+    with btn_col:
+        if st.button("Actualizar comisiones"):
+            load_dotenv()
+            api_key = os.getenv("BINANCE_API_KEY")
+            api_secret = os.getenv("BINANCE_API_SECRET")
+            try:
+                meta = BinanceMeta(api_key, api_secret, use_testnet)
+                fee_map = meta.get_account_trade_fees()
+                symbol_key = (
+                    selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map))
+                )
+                entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
+                st.session_state["fee_maker"] = entry.get("maker", fees_maker)
+                st.session_state["fee_taker"] = entry.get("taker", fees_taker)
+                st.session_state["fee_origin"] = meta.last_fee_origin
+                st.success(f"Maker {entry.get('maker',0)} | Taker {entry.get('taker',0)}")
+            except Exception as e:
+                st.error(f"No se pudo obtener: {e}")
+    with origin_col:
+        origin = st.session_state.get("fee_origin")
+        if origin:
+            st.caption(origin)
     fees_maker = st.session_state.get("fee_maker", fees_maker)
     fees_taker = st.session_state.get("fee_taker", fees_taker)
     cfg["fees"] = {"maker": fees_maker, "taker": fees_taker}
