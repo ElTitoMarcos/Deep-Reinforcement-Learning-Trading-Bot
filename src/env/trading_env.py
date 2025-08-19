@@ -8,12 +8,14 @@ full featured trading simulation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Tuple, Dict, Any, List
+from typing import Tuple, Dict, Any, List, Callable
 
 import numpy as np
 import pandas as pd
 import yaml
 import logging
+
+from ..utils.orderbook import compute_walls, distancia_a_muralla
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +36,14 @@ class _Discrete:
 
 
 class TradingEnv:
-    def __init__(self, df: pd.DataFrame):
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        orderbook_hook: Callable[[int], Dict[str, Any]] | None = None,
+    ):
         self.df = df.reset_index(drop=True)
         self.current_step = 0
+        self._orderbook_hook = orderbook_hook
 
         # caches ---------------------------------------------------------
         self._close = self.df["close"].to_numpy(dtype=float)
@@ -78,7 +85,7 @@ class TradingEnv:
             - log returns over 5/15/60 ticks
             - rolling volatility over the past 60 returns
             - local drawdown over the past 300 ticks
-            - distance to local minimum ("wall") over the past 300 ticks
+            - distance to liquidity wall (normalised), or to recent low if no orderbook
             - in-position flag (0/1)
             - normalised trailing stop distance
 
@@ -108,9 +115,20 @@ class TradingEnv:
         max_price = float(np.max(self._close[max(0, step - 299): step + 1]))
         drawdown_300 = float(price / max_price - 1.0) if max_price > 0 else 0.0
 
-        # distance to local minimum ("wall") over last 300 ticks
-        min_price = float(np.min(self._low[max(0, step - 299): step + 1]))
-        dist_wall = float(price - min_price)
+        # distance to liquidity wall -----------------------------------
+        if self._orderbook_hook is not None:
+            ob = self._orderbook_hook(step)
+            bids = ob.get("bids") if ob else None
+            asks = ob.get("asks") if ob else None
+            if bids and asks:
+                mid = (float(bids[0][0]) + float(asks[0][0])) / 2.0
+                walls = compute_walls(bids, asks)
+                dist_wall = distancia_a_muralla(mid, walls)
+            else:
+                dist_wall = 0.0
+        else:
+            min_price = float(np.min(self._low[max(0, step - 299): step + 1]))
+            dist_wall = (price - min_price) / price if price > 0 else 0.0
 
         # position based -------------------------------------------------
         en_posicion = 1.0 if self.in_position else 0.0
