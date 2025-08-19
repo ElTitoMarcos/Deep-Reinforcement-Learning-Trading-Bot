@@ -5,6 +5,7 @@ import streamlit as st
 from src.utils.config import load_config
 from src.utils.paths import ensure_dirs_exist, get_raw_dir
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, simulate_1s_from_1m, save_history
+from src.data.symbol_discovery import discover_symbols
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
@@ -30,8 +31,28 @@ with st.sidebar:
     mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
     use_testnet = mode == "Testnet"
     os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
+    st.caption("Símbolos sugeridos (auto)")
+    refresh_syms = st.button("Actualizar", key="refresh_syms")
+    if "symbol_checks" not in st.session_state or refresh_syms:
+        try:
+            ex = get_exchange(use_testnet=use_testnet)
+            suggested = discover_symbols(ex, top_n=20)
+        except Exception as e:
+            st.warning(f"Descubrimiento falló: {e}")
+            suggested = cfg.get("symbols") or ["BTC/USDT"]
+        checks = st.session_state.get("symbol_checks", {})
+        for s in suggested:
+            checks.setdefault(s, True)
+        st.session_state["symbol_checks"] = checks
+    checks = st.session_state.get("symbol_checks", {})
+    for sym in sorted(checks):
+        checks[sym] = st.checkbox(sym, value=checks[sym], key=f"sym_{sym}")
+    manual = st.text_input("Añadir manualmente", key="manual_sym").upper().strip()
+    if manual and manual not in checks:
+        checks[manual] = True
+    selected_symbols = [s for s, v in checks.items() if v]
+    cfg["symbols"] = selected_symbols
 
-    symbols = st.text_input("Símbolos (espacio-separado)", value=" ".join(cfg.get("symbols") or ["BTC/USDT"]), key="symbols_space")
     timeframe = st.selectbox("Timeframe", ["1s","1m","3m","5m","15m"], index=1)
 
     fees_taker = st.number_input("Fee taker", value=float(cfg.get("fees",{}).get("taker",0.001)), step=0.0001, format="%.6f")
@@ -76,7 +97,7 @@ with st.sidebar:
         new_cfg = {
             "exchange": "binance",
             "binance_use_testnet": use_testnet,
-            "symbols": symbols.split(),
+            "symbols": selected_symbols,
             "timeframe": timeframe,
             "fees": {"taker": fees_taker, "maker": cfg.get("fees", {}).get("maker", fees_taker)},
             "slippage": slippage,
@@ -106,8 +127,7 @@ with col1:
     dl_timeframe = st.selectbox("Timeframe descarga", ["1s","1m","3m","5m","15m"], index=1, key="dl_tf")
 with col2:
     since = st.text_input("Desde (ISO UTC, ej. 2024-01-01)", value="", key="since_iso")
-
-symbols_run = st.text_input("Símbolos a descargar", value=symbols, key="symbols_dl")
+st.write("Seleccionados: " + ", ".join(selected_symbols))
 if st.button("⬇️ Descargar histórico"):
     try:
         ex = get_exchange(use_testnet=use_testnet)
@@ -119,7 +139,7 @@ if st.button("⬇️ Descargar histórico"):
                 since_ms = int(dt.timestamp()*1000)
             except Exception:
                 since_ms = None
-        for sym in symbols_run.split():
+        for sym in selected_symbols:
             df = fetch_ohlcv(ex, sym, timeframe=dl_timeframe, since=since_ms)
             if dl_timeframe == "1s" and df.empty:
                 st.warning(f"1s no disponible en {sym}; simulando desde 1m")
@@ -139,7 +159,11 @@ with colt2:
     st.empty()
 
 if st.button("🚀 Entrenar"):
-    cmd = ["python", "-m", "src.training.train_drl", "--config", CONFIG_PATH, "--algo", algo_run, "--timesteps", str(int(timesteps))]
+    import tempfile, yaml
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
+        yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
+        cfg_path = tmp.name
+    cmd = ["python", "-m", "src.training.train_drl", "--config", cfg_path, "--algo", algo_run, "--timesteps", str(int(timesteps))]
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -157,7 +181,11 @@ with colb2:
     st.empty()
 
 if st.button("📈 Evaluar"):
-    cmd = ["python", "-m", "src.backtest.evaluate", "--config", CONFIG_PATH, "--policy", policy]
+    import tempfile, yaml
+    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
+        yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
+        cfg_path = tmp.name
+    cmd = ["python", "-m", "src.backtest.evaluate", "--config", cfg_path, "--policy", policy]
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
