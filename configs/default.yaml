@@ -36,9 +36,9 @@ dqn:
 # Reward heads
 reward_weights:
   pnl: 1.0
-  turnover_penalty: 0.1
-  drawdown_penalty: 0.2
-  volatility_penalty: 0.1
+  turn: 0.1
+  dd: 0.2
+  vol: 0.1
 
 # Paths
 paths:
