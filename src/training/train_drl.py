@@ -30,6 +30,7 @@ from ..env.trading_env import TradingEnv
 from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger, config_hash
+from ..utils.paths import get_raw_dir, get_checkpoints_dir, ensure_dirs_exist
 from ..policies.value_based import ValueBasedPolicy
 
 
@@ -108,19 +109,18 @@ def has_sb3() -> bool:
 
 
 def load_data(cfg: dict, data_path: str | None, timesteps: int) -> pd.DataFrame:
-    """Load price data or generate synthetic series if not available."""
+    """Load price data or generate a synthetic series if none is found."""
 
     if data_path:
         return load_table(data_path)
 
-    paths = cfg.get("paths", {})
-    raw_dir = paths.get("raw_dir", "data/raw")
+    raw_dir = get_raw_dir(cfg)
     exchange = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     timeframe = cfg.get("timeframe", "1m")
-    fname = os.path.join(raw_dir, exchange, symbol.replace("/", "-"), f"{timeframe}.parquet")
+    fname = raw_dir / exchange / symbol.replace("/", "-") / f"{timeframe}.parquet"
 
-    if os.path.exists(fname):  # pragma: no branch - depends on repo data
+    if fname.exists():  # pragma: no branch - depends on repo data
         return load_table(fname)
 
     # generate simple random walk prices
@@ -294,6 +294,7 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    ensure_dirs_exist(cfg)
     df = load_data(cfg, args.data, args.timesteps)
     env = TradingEnv(df)
 
@@ -303,14 +304,15 @@ def main() -> None:
     logger = ensure_logger(os.path.join(logs_dir, "train.jsonl"))
     logger.log("INFO", "env_ready", obs_dim=int(env.observation_space.shape[0]), actions=int(env.action_space.n))
 
+    ckpt_dir = str(get_checkpoints_dir(cfg))
     if args.algo.lower() == "dqn":
-        out = train_value_dqn(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"), checkpoint_freq=args.checkpoint_freq)
+        out = train_value_dqn(env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq)
     elif args.algo.lower() == "tiny":
-        out = train_dqn(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"), checkpoint_freq=args.checkpoint_freq)
+        out = train_dqn(env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq)
     elif args.algo.lower() == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.get("checkpoints_dir", "checkpoints"))
+        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
     else:  # pragma: no cover
         raise ValueError(f"Unknown algorithm: {args.algo}")
 
