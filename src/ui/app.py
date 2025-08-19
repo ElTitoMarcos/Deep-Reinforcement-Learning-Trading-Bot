@@ -3,7 +3,7 @@ from datetime import datetime
 import streamlit as st
 
 from src.utils.config import load_config
-from src.utils.data_io import load_table
+from src.utils.paths import ensure_dirs_exist
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, simulate_1s_from_1m, save_history
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
@@ -19,6 +19,7 @@ with st.sidebar:
     # Cargar YAML
     try:
         cfg = load_config(CONFIG_PATH)
+        ensure_dirs_exist(cfg)
     except Exception as e:
         st.error(f"No se pudo cargar {CONFIG_PATH}: {e}")
         cfg = {}
@@ -148,12 +149,10 @@ with colt1:
     algo_run = st.selectbox("Algoritmo", ["ppo","dqn"], index=0 if algo=="ppo" else 1)
     timesteps = st.number_input("Timesteps", value=20000, step=1000)
 with colt2:
-    data_override = st.text_input("Ruta datos (opcional)", value="", key="train_data_override")
+    st.empty()
 
 if st.button("🚀 Entrenar"):
     cmd = ["python", "-m", "src.training.train_drl", "--config", CONFIG_PATH, "--algo", algo_run, "--timesteps", str(int(timesteps))]
-    if data_override:
-        cmd.extend(["--data", data_override])
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -168,12 +167,10 @@ colb1, colb2 = st.columns(2)
 with colb1:
     policy = st.selectbox("Política", ["deterministic","stochastic","dqn"])
 with colb2:
-    data_eval = st.text_input("Ruta datos (opcional)", value="", key="eval_data_override")
+    st.empty()
 
 if st.button("📈 Evaluar"):
     cmd = ["python", "-m", "src.backtest.evaluate", "--config", CONFIG_PATH, "--policy", policy]
-    if data_eval:
-        cmd.extend(["--data", data_eval])
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
