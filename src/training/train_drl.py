@@ -33,13 +33,18 @@ import pandas as pd
 
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
+from ..auto.timeframe_adapter import propose_timeframe
 from ..utils.config import load_config
-from ..utils.data_io import load_table
+from ..utils.data_io import load_table, resample_to
 from ..utils.logging import ensure_logger, config_hash
 from ..utils import paths
 from ..utils.device import get_device, set_cpu_threads
 from ..policies.value_based import ValueBasedPolicy
 from ..llm import LLMClient, SYSTEM_PROMPT, build_periodic_prompt
+from ..data.refresh_worker import start_refresh_worker, stop_refresh_worker, dataset_updated
+from ..utils.health import memory_guard, time_guard
+
+import gc
 
 
 # ---------------------------------------------------------------------------
@@ -303,11 +308,24 @@ def train_value_dqn(
     llm_client = None
     llm_file = None
     llm_every = int(llm_cfg.get("every_n") or 0)
+    llm_mode = llm_cfg.get("mode", "episodes")
+    last_llm_time = time.time()
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
         llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
+
+    auto_cfg = cfg.get("auto", {})
+    stage_eps = int(auto_cfg.get("timeframe_every_episodes", 0))
+    base_tf = cfg.get("timeframe", "1m")
+    base_df = env.df.copy()
+    current_tf = base_tf
+    exchange_name = cfg.get("exchange", "binance")
+    symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
+    data_path = paths.raw_parquet_path(exchange_name, symbol, base_tf)
+    if continuous:
+        start_refresh_worker(cfg.get("symbols", []), base_tf)
 
     total_steps = 0
     episode = 0
@@ -322,72 +340,155 @@ def train_value_dqn(
         last_ckpt = last_heartbeat = time.time()
 
     backoff = 60.0
-    while total_steps < timesteps:
-        try:
-            obs, _ = env.reset()
-            done = False
-            episode += 1
-            ep_reward = 0.0
-            while not done and total_steps < timesteps:
-                action = agent.act(obs)
-                next_obs, reward, done, trunc, _info = env.step(action)
-                agent.remember(obs, action, reward, next_obs, done or trunc)
-                agent.train_step()
-                obs = next_obs
-                total_steps += 1
-                ep_reward += reward
-
-                if continuous:
+    try:
+        while total_steps < timesteps:
+            try:
+                seed_override = None
+                if stage_eps and episode % stage_eps == 0:
+                    returns = env.df["close"].pct_change().dropna()
+                    recent_vol = float(returns.rolling(20).std().iloc[-1]) if not returns.empty else 0.0
+                    gaps = np.diff(env.df["ts"].to_numpy())
+                    step = pd.Series(gaps).mode().iloc[0] if len(gaps) else 0
+                    gap_ratio = float((gaps > step * 1.5).mean()) if step else 0.0
+                    stats = {
+                        "recent_volatility": recent_vol,
+                        "gap_ratio": gap_ratio,
+                        "device": dqn_cfg.get("device", "cpu"),
+                        "batch_size": dqn_cfg.get("batch_size", 64),
+                        "base_tf": base_tf,
+                        "current_tf": current_tf,
+                    }
+                    vol_prof = auto_cfg.get("vol_profile", {"high": 0.02, "low": 0.005})
+                    lat_budget = 1.0 if dqn_cfg.get("device") == "cuda" else 0.5
+                    proposal = propose_timeframe(stats, vol_prof, lat_budget, llm_client if llm_cfg.get("enabled") else None)
+                    if proposal["resample_to"] != current_tf:
+                        current_tf = proposal["resample_to"]
+                        new_df = resample_to(base_df, current_tf)
+                        env = TradingEnv(new_df, cfg=env.cfg)
+                        seed_override = random.randint(0, 2**32 - 1)
+                        logger.log(
+                            "INFO",
+                            "timeframe_adapted",
+                            base=proposal["base_tf"],
+                            resample=current_tf,
+                            reason=proposal["reason"],
+                            seed=seed_override,
+                        )
+                        print(
+                            f"Timeframe adaptado: base={proposal['base_tf']} \u2192 resample={current_tf} (motivo: {proposal['reason']})"
+                        )
+                obs, _ = env.reset(seed=seed_override)
+                done = False
+                episode += 1
+                ep_reward = 0.0
+                while not done and total_steps < timesteps:
+                    action = agent.act(obs)
+                    next_obs, reward, done, trunc, _info = env.step(action)
+                    agent.remember(obs, action, reward, next_obs, done or trunc)
+                    agent.train_step()
+                    obs = next_obs
+                    total_steps += 1
+                    ep_reward += reward
                     now = time.time()
-                    if checkpoint_interval_min and now - last_ckpt >= checkpoint_interval_min * 60:
-                        _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
-                        last_ckpt = now
-                    if now - last_heartbeat >= 300:
+                    if (
+                        llm_client
+                        and llm_mode == "minutes"
+                        and llm_every > 0
+                        and now - last_llm_time >= llm_every * 60
+                    ):
                         mean_reward = (total_reward + ep_reward) / max(1, episode)
-                        hhmm = time.strftime("%H:%M", time.gmtime(now - start_time))
-                        msg = f"alive t={hhmm}, steps={total_steps}, reward_mean={mean_reward:.4f}"
-                        print(msg)
-                        logger.log("INFO", "heartbeat", t=hhmm, steps=total_steps, reward_mean=mean_reward)
-                        last_heartbeat = now
-                    if max_hours and (now - start_time) >= max_hours * 3600:
-                        _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
-                        if llm_file:
-                            llm_file.close()
-                        symbol = paths.symbol_to_dir((cfg.get("symbols") or ["UNK"])[0])
-                        final_path = save_model(agent, "dqn", symbol)
-                        return final_path
+                        _maybe_call_llm(
+                            cfg,
+                            "dqn",
+                            episode,
+                            mean_reward,
+                            env,
+                            llm_client,
+                            llm_file,
+                            logger,
+                        )
+                        last_llm_time = now
 
-            total_reward += ep_reward
-            if llm_client and episode % llm_every == 0:
-                mean_reward = total_reward / episode
-                _maybe_call_llm(
-                    cfg,
-                    "dqn",
-                    episode,
-                    mean_reward,
-                    env,
-                    llm_client,
-                    llm_file,
-                    logger,
-                )
-
-            if not continuous and checkpoint_freq and episode % checkpoint_freq == 0:
-                ckpt = Path(outdir) / f"vdqn_ep{episode}.pt"
-                agent.save_model(paths.posix(ckpt))
-
-        except (MemoryError, OSError) as e:
-            if not continuous:
-                raise
-            err = getattr(e, "errno", None)
-            transient = isinstance(e, MemoryError) or err in {errno.EAGAIN, getattr(socket, "EAI_AGAIN", None)}
-            if not transient:
-                raise
-            logger.log("WARN", "transient_error", err=str(e), backoff=backoff)
-            time.sleep(backoff)
-            backoff = min(backoff * 2, 3600)
-            if ckpt_path.exists():
-                total_steps, episode, total_reward, start_time = _load_checkpoint(ckpt_path, agent)
+                    if continuous:
+                        if checkpoint_interval_min and now - last_ckpt >= checkpoint_interval_min * 60:
+                            last_ckpt = last_heartbeat = now
+                            if not memory_guard():
+                                logger.log("WARN", "memory_guard_triggered")
+                                print("Memoria excedida, reiniciando entorno")
+                                gc.collect()
+                                _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
+                                env = TradingEnv(resample_to(base_df, current_tf), cfg=env.cfg)
+                                break
+                            _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
+                        if not time_guard(last_heartbeat):
+                            logger.log("WARN", "timeout_guard_triggered")
+                            print("Timeout sin progreso, reiniciando etapa")
+                            _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
+                            env = TradingEnv(resample_to(base_df, current_tf), cfg=env.cfg)
+                            last_ckpt = last_heartbeat = time.time()
+                            break
+                        if now - last_heartbeat >= 300:
+                            mean_reward = (total_reward + ep_reward) / max(1, episode)
+                            hhmm = time.strftime("%H:%M", time.gmtime(now - start_time))
+                            msg = f"alive t={hhmm}, steps={total_steps}, reward_mean={mean_reward:.4f}"
+                            print(msg)
+                            logger.log("INFO", "heartbeat", t=hhmm, steps=total_steps, reward_mean=mean_reward)
+                            last_heartbeat = now
+                        if max_hours and (now - start_time) >= max_hours * 3600:
+                            _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
+                            if llm_file:
+                                llm_file.close()
+                            symbol = paths.symbol_to_dir((cfg.get("symbols") or ["UNK"])[0])
+                            final_path = save_model(agent, "dqn", symbol)
+                            return final_path
+    
+                total_reward += ep_reward
+                if (
+                    llm_client
+                    and llm_mode == "episodes"
+                    and llm_every > 0
+                    and episode % llm_every == 0
+                ):
+                    mean_reward = total_reward / episode
+                    _maybe_call_llm(
+                        cfg,
+                        "dqn",
+                        episode,
+                        mean_reward,
+                        env,
+                        llm_client,
+                        llm_file,
+                        logger,
+                    )
+    
+                if continuous and dataset_updated.is_set():
+                    base_df = load_table(paths.posix(data_path))
+                    new_df = resample_to(base_df, current_tf)
+                    env = TradingEnv(new_df, cfg=env.cfg)
+                    dataset_updated.clear()
+                    logger.log("INFO", "dataloader_refreshed")
+                    print("Dataloader refrescado")
+    
+                if not continuous and checkpoint_freq and episode % checkpoint_freq == 0:
+                    ckpt = Path(outdir) / f"vdqn_ep{episode}.pt"
+                    agent.save_model(paths.posix(ckpt))
+    
+            except (MemoryError, OSError) as e:
+                if not continuous:
+                    raise
+                err = getattr(e, "errno", None)
+                transient = isinstance(e, MemoryError) or err in {errno.EAGAIN, getattr(socket, "EAI_AGAIN", None)}
+                if not transient:
+                    raise
+                logger.log("WARN", "transient_error", err=str(e), backoff=backoff)
+                time.sleep(backoff)
+                backoff = min(backoff * 2, 3600)
+                if ckpt_path.exists():
+                    total_steps, episode, total_reward, start_time = _load_checkpoint(ckpt_path, agent)
             continue
+    finally:
+        if continuous:
+            stop_refresh_worker()
 
     if continuous:
         _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward, start_time)
@@ -426,11 +527,19 @@ def train_dqn(
     llm_client = None
     llm_file = None
     llm_every = int(llm_cfg.get("every_n") or 0)
+    llm_mode = llm_cfg.get("mode", "episodes")
+    last_llm_time = time.time()
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
         llm_file = open(reports_dir / "llm_suggestions.jsonl", "a", encoding="utf-8")
+
+    auto_cfg = cfg.get("auto", {})
+    stage_eps = int(auto_cfg.get("timeframe_every_episodes", 0))
+    base_tf = cfg.get("timeframe", "1m")
+    base_df = env.df.copy()
+    current_tf = base_tf
 
     eps_start = dqn_cfg.get("epsilon_start", 1.0)
     eps_end = dqn_cfg.get("epsilon_end", 0.05)
@@ -440,7 +549,41 @@ def train_dqn(
     episode = 0
     total_reward = 0.0
     while total_steps < timesteps:
-        obs, _ = env.reset()
+        seed_override = None
+        if stage_eps and episode % stage_eps == 0:
+            returns = env.df["close"].pct_change().dropna()
+            recent_vol = float(returns.rolling(20).std().iloc[-1]) if not returns.empty else 0.0
+            gaps = np.diff(env.df["ts"].to_numpy())
+            step = pd.Series(gaps).mode().iloc[0] if len(gaps) else 0
+            gap_ratio = float((gaps > step * 1.5).mean()) if step else 0.0
+            stats = {
+                "recent_volatility": recent_vol,
+                "gap_ratio": gap_ratio,
+                "device": dqn_cfg.get("device", "cpu"),
+                "batch_size": dqn_cfg.get("batch_size", 64),
+                "base_tf": base_tf,
+                "current_tf": current_tf,
+            }
+            vol_prof = auto_cfg.get("vol_profile", {"high": 0.02, "low": 0.005})
+            lat_budget = 1.0 if dqn_cfg.get("device") == "cuda" else 0.5
+            proposal = propose_timeframe(stats, vol_prof, lat_budget, llm_client if llm_cfg.get("enabled") else None)
+            if proposal["resample_to"] != current_tf:
+                current_tf = proposal["resample_to"]
+                new_df = resample_to(base_df, current_tf)
+                env = TradingEnv(new_df, cfg=env.cfg)
+                seed_override = random.randint(0, 2**32 - 1)
+                logger.log(
+                    "INFO",
+                    "timeframe_adapted",
+                    base=proposal["base_tf"],
+                    resample=current_tf,
+                    reason=proposal["reason"],
+                    seed=seed_override,
+                )
+                print(
+                    f"Timeframe adaptado: base={proposal['base_tf']} \u2192 resample={current_tf} (motivo: {proposal['reason']})"
+                )
+        obs, _ = env.reset(seed=seed_override)
         done = False
         episode += 1
         ep_reward = 0.0
@@ -453,9 +596,33 @@ def train_dqn(
             obs = next_obs
             total_steps += 1
             ep_reward += reward
+            now = time.time()
+            if (
+                llm_client
+                and llm_mode == "minutes"
+                and llm_every > 0
+                and now - last_llm_time >= llm_every * 60
+            ):
+                mean_reward = (total_reward + ep_reward) / max(1, episode)
+                _maybe_call_llm(
+                    cfg,
+                    "dqn",
+                    episode,
+                    mean_reward,
+                    env,
+                    llm_client,
+                    llm_file,
+                    logger,
+                )
+                last_llm_time = now
 
         total_reward += ep_reward
-        if llm_client and episode % llm_every == 0:
+        if (
+            llm_client
+            and llm_mode == "episodes"
+            and llm_every > 0
+            and episode % llm_every == 0
+        ):
             mean_reward = total_reward / episode
             _maybe_call_llm(
                 cfg,
@@ -666,4 +833,3 @@ def main() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     main()
-

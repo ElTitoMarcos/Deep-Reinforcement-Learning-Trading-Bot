@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import os
+import time
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
@@ -42,6 +45,35 @@ def load_table(path: str) -> pd.DataFrame:
         return pd.read_parquet(path)
     else:
         raise ValueError(f"Unsupported extension: {ext}")
+
+
+def write_parquet_atomic(df: pd.DataFrame, path: str | os.PathLike[str]) -> None:
+    """Write *df* to *path* atomically.
+
+    The DataFrame is first written to a temporary file in the same
+    directory, flushed to disk and then moved into place using
+    :func:`os.replace`.
+    """
+
+    p = Path(path)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    df.to_parquet(posix(tmp), index=False)
+    # ensure data is persisted before rename
+    with open(posix(tmp), "rb") as fh:
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(posix(tmp), posix(p))
+
+
+def read_parquet_safe(path: str | os.PathLike[str]) -> pd.DataFrame:
+    """Read a Parquet file retrying once if the first attempt fails."""
+
+    p = Path(path)
+    try:
+        return pd.read_parquet(posix(p))
+    except Exception:
+        time.sleep(0.1)
+        return pd.read_parquet(posix(p))
 
 
 # ---------------------------------------------------------------------------
@@ -86,17 +118,24 @@ def resample_to(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
     df: pd.DataFrame
         Table with at least ``ts`` (ms) and OHLCV columns.
     timeframe: str
-        ``"1s"`` or ``"1m"``.
+        String such as ``"1s"``, ``"5s"``, ``"15s"`` or ``"1m"``.
     """
 
-    if timeframe not in {"1s", "1m"}:
-        raise ValueError("timeframe must be '1s' or '1m'")
+    if not timeframe.endswith("s") and not timeframe.endswith("m"):
+        raise ValueError("timeframe must end with 's' or 'm'")
+
+    try:
+        qty = int(timeframe[:-1])
+    except ValueError as e:  # pragma: no cover - invalid format
+        raise ValueError(f"invalid timeframe: {timeframe}") from e
+    if qty <= 0:  # pragma: no cover - non-positive intervals
+        raise ValueError("timeframe must be positive")
 
     df = df.copy()
     dt_index = pd.to_datetime(df["ts"], unit="ms", utc=True)
     df.set_index(dt_index, inplace=True)
 
-    rule = "1S" if timeframe == "1s" else "1T"
+    rule = f"{qty}S" if timeframe.endswith("s") else f"{qty}T"
     ohlcv = df.resample(rule).agg(
         {
             "open": "first",

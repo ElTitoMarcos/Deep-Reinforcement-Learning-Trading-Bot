@@ -102,3 +102,38 @@ def render_panel(results: Mapping[str, Any]) -> None:
             f"{turn:.2f}",
             help="Cuánto opera el bot",
         )
+
+
+def episode_sentence(metrics: Mapping[str, Any]) -> str:
+    """Return a short friendly sentence summarising recent performance.
+
+    Parameters
+    ----------
+    metrics:
+        Mapping containing at least ``pnl``, ``consistency`` and ``turnover``
+        values.  Optionally ``window`` may describe the lookback period.
+    """
+
+    window = str(metrics.get("window", "la última hora"))
+    pnl = float(metrics.get("pnl", 0.0))
+    cons = float(metrics.get("consistency", 0.0))
+    turn = float(metrics.get("turnover", 0.0))
+
+    pnl_str = f"{pnl*100:+.1f}%"
+
+    if cons > 1.0:
+        cons_lbl = "alta"
+    elif cons > 0.5:
+        cons_lbl = "media"
+    else:
+        cons_lbl = "baja"
+
+    if turn > 1.0:
+        act_lbl = "alta"
+    elif turn > 0.2:
+        act_lbl = "moderada"
+    else:
+        act_lbl = "baja"
+
+    return f"Acumulas {pnl_str} en {window}; consistencia {cons_lbl}; actividad {act_lbl}."
+

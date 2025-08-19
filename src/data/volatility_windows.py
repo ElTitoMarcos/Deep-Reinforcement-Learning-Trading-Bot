@@ -70,6 +70,8 @@ def find_high_activity_windows(
         lookback_hours = target_hours * 6
     end = int(time.time() * 1000)
     since = end - lookback_hours * 3600000
+    start_hour = _hour_floor(since)
+    end_cap = start_hour + lookback_hours * 3600000
 
     frames: List[pd.DataFrame] = []
     trade_frames: List[pd.DataFrame] = []
@@ -79,11 +81,11 @@ def find_high_activity_windows(
                 ex.id if hasattr(ex, "id") else "binance", sym, tf_str, hours=lookback_hours
             )
             df = pd.read_parquet(path)
-            df = df[df["ts"] >= since]
+            df = df[(df["ts"] >= start_hour) & (df["ts"] < end_cap)]
             df["symbol"] = sym
             frames.append(df)
 
-            trade_counts = _fetch_trade_counts(ex, sym, since, end)
+            trade_counts = _fetch_trade_counts(ex, sym, start_hour, end_cap)
             if not trade_counts.empty:
                 trade_frames.append(trade_counts)
         except Exception as exc:  # pragma: no cover - network dependent
