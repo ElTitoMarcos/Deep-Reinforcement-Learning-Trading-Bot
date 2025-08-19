@@ -9,6 +9,16 @@ from src.utils.device import get_device, set_cpu_threads
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.volatility_windows import find_high_activity_windows
 from src.data.symbol_discovery import discover_symbols
+from src.data import (
+    fetch_symbol_metadata,
+    fetch_extra_series,
+    validate_ohlcv,
+    validate_metadata,
+    validate_trades,
+    passes,
+    summarize,
+)
+from src.data.quality import QualityReport
 from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
 from src.auto.strategy_selector import choose_algo
@@ -244,6 +254,56 @@ with st.sidebar:
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
             yaml.safe_dump(new_cfg, f, sort_keys=False, allow_unicode=True)
         st.success(f"Guardado {CONFIG_PATH}")
+
+st.subheader("🧹 Enriquecimiento y verificación de datos")
+if st.button("Obtener y validar datos"):
+    from pathlib import Path
+    from datetime import datetime
+
+    ex = get_exchange(use_testnet=use_testnet)
+    # Re-descubrir por si hay nuevos símbolos disponibles
+    try:
+        discover_symbols(ex, top_n=5)
+    except Exception:
+        pass
+
+    meta_map = fetch_symbol_metadata(selected_symbols)
+    for sym in selected_symbols:
+        meta = meta_map.get(sym, {})
+        m_report = validate_metadata(meta)
+        series = fetch_extra_series(sym, timeframe=cfg.get("timeframe", "1m"))
+        ohlcv = series.get("ohlcv")
+        t_report = validate_trades(series.get("trades"))
+        o_report = validate_ohlcv(ohlcv)
+        combined = QualityReport()
+        combined.errors.extend(m_report.errors + o_report.errors + t_report.errors)
+        combined.warnings.extend(m_report.warnings + o_report.warnings + t_report.warnings)
+        summary = summarize(combined)
+        if passes(combined):
+            out_dir = Path("data/processed") / sym.replace("/", "")
+            out_dir.mkdir(parents=True, exist_ok=True)
+            data_file = ""
+            if ohlcv is not None and not ohlcv.empty:
+                try:
+                    ohlcv.reset_index().to_parquet(out_dir / "ohlcv.parquet", index=False)
+                    data_file = "ohlcv.parquet"
+                except Exception:
+                    ohlcv.reset_index().to_csv(out_dir / "ohlcv.csv", index=False)
+                    data_file = "ohlcv.csv"
+            manifest = {
+                "symbol": sym,
+                "obtained_at": datetime.utcnow().isoformat(),
+                "source": meta.get("source"),
+                "qc": summary,
+                "data_file": data_file,
+            }
+            if meta.get("error"):
+                manifest["note"] = meta["error"]
+            with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            st.success(f"✅ {sym} - {summary}")
+        else:
+            st.error(f"❌ {sym} - {summary}")
 
 st.subheader("📥 Datos")
 st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
