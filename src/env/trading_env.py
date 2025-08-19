@@ -205,7 +205,31 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         return np.asarray(scaled_features, dtype=np.float32)
 
     # public API -------------------------------------------------------
-    def reset(self) -> Tuple[np.ndarray, Dict[str, Any]]:
+    def reset(
+        self,
+        *,
+        seed: int | None = None,
+        options: Dict[str, Any] | None = None,
+    ) -> Tuple[np.ndarray, Dict[str, Any]]:
+        """Reset environment state.
+
+        Parameters
+        ----------
+        seed: int | None
+            Optional random seed for compatibility with Gym/Gymnasium.
+        options: Dict[str, Any] | None
+            Currently ignored, present for API completeness.
+        """
+
+        if seed is not None:
+            try:  # pragma: no cover - seeding not critical for logic
+                if hasattr(super(), "reset"):
+                    super().reset(seed=seed)  # type: ignore[misc]
+                else:
+                    np.random.seed(seed)
+            except TypeError:
+                np.random.seed(seed)
+
         self.current_step = 0
         self.in_position = False
         self.trailing_stop = None
