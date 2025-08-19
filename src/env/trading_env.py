@@ -183,7 +183,7 @@ class TradingEnv:
             self.trailing_stop = None
             self.entry_price = None
             trade = True
-
+            
         # TODO: support a continuous size component (0..1) alongside the
         # discrete action for finer trade management
 
