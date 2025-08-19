@@ -23,7 +23,6 @@ def test_binance_meta_parses_response(monkeypatch):
     assert fees["BTCUSDT"]["taker"] == 0.002
     assert fees["BTCUSDT"]["maker"] == 0.001
 
-
 def test_symbol_filters_cached(monkeypatch):
     calls = []
 
@@ -51,7 +50,6 @@ def test_symbol_filters_cached(monkeypatch):
     f2 = meta.get_symbol_filters("BTCUSDT")
     assert calls.count(1) == 1
     assert f1 == f2 == {"tickSize": 0.01, "stepSize": 0.001, "minNotional": 10.0}
-
 
 def test_binance_meta_fallback(monkeypatch):
     def raise_exc(*args, **kwargs):
