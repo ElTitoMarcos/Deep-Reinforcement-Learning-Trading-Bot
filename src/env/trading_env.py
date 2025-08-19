@@ -63,6 +63,7 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         df: pd.DataFrame,
         orderbook_hook: Callable[[int], Dict[str, Any]] | None = None,
         *,
+        cfg: dict | None = None,
         max_trades_per_window: int | None = None,
         trade_window_seconds: float = 0.0,
         trade_cooldown_seconds: float = 0.0,
@@ -95,8 +96,10 @@ class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
         # in the future this could include a continuous component (0..1)
         # to express position sizing alongside the discrete action
         # config ---------------------------------------------------------
-        with open("configs/default.yaml", "r", encoding="utf-8") as f:
-            cfg = yaml.safe_load(f)
+        if cfg is None:
+            with open("configs/default.yaml", "r", encoding="utf-8") as f:
+                cfg = yaml.safe_load(f)
+        self.cfg = cfg
         fees = cfg.get("fees", {})
         self.fee_rate = float(fees.get("taker", 0.0))
         rw = cfg.get("reward_weights", {})
