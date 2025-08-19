@@ -8,6 +8,7 @@ lightweight to avoid heavy dependencies during testing.
 from __future__ import annotations
 
 import os
+import logging
 from typing import Any, Optional
 
 import pandas as pd
@@ -18,6 +19,9 @@ __all__ = [
     "fetch_ohlcv",
     "save_history",
 ]
+
+
+logger = logging.getLogger(__name__)
 
 
 def simulate_1s_from_1m(df_1m: pd.DataFrame) -> pd.DataFrame:
@@ -93,14 +97,35 @@ def get_exchange(name: str | None = None, *, use_testnet: bool | None = None):
 def fetch_ohlcv(
     exchange: Any,
     symbol: str,
-    timeframe: str = "1m",
+    timeframe: Optional[str] = None,
     since: Optional[int] = None,
     limit: int = 1000,
 ) -> pd.DataFrame:
-    """Fetch OHLCV data from *exchange* and return a DataFrame."""
+    """Fetch OHLCV data from *exchange* and return a DataFrame.
 
-    data = exchange.fetch_ohlcv(symbol, timeframe=timeframe, since=since, limit=limit)
-    return pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "volume"])
+    When *timeframe* is ``None`` the function attempts to pick the smallest
+    available timeframe from ``exchange.timeframes`` following the order
+    ``["1s","3s","5s","15s","30s","1m","3m","5m"]``.  The chosen
+    timeframe is stored in ``df.attrs['timeframe']`` and logged via the module
+    logger.
+    """
+
+    tf = timeframe
+    if tf is None:
+        candidates = ["1s", "3s", "5s", "15s", "30s", "1m", "3m", "5m"]
+        available = getattr(exchange, "timeframes", {}) or {}
+        for cand in candidates:
+            if cand in available:
+                tf = cand
+                break
+        if tf is None:  # pragma: no cover - unlikely for Binance
+            raise ValueError("no supported timeframe found")
+        logger.info("selected_timeframe=%s", tf)
+
+    data = exchange.fetch_ohlcv(symbol, timeframe=tf, since=since, limit=limit)
+    df = pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "volume"])
+    df.attrs["timeframe"] = tf
+    return df
 
 
 def save_history(
