@@ -5,6 +5,7 @@ import streamlit as st
 from src.utils.config import load_config
 from src.utils.paths import ensure_dirs_exist, get_raw_dir
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
+from src.data.volatility_windows import find_high_activity_windows
 from src.data.symbol_discovery import discover_symbols
 from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
@@ -234,25 +235,38 @@ with st.sidebar:
 
 st.subheader("📥 Datos")
 st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
-since = st.text_input("Desde (ISO UTC, ej. 2024-01-01)", value="", key="since_iso")
+st.write("Construyendo dataset con tramos de alta actividad...")
 st.write("Seleccionados: " + ", ".join(selected_symbols))
 if st.button("⬇️ Descargar histórico"):
+    from datetime import datetime
+    import pandas as pd
     try:
+        tf_str = cfg.get("timeframe", "1m")
+        timeframe_min = int(tf_str.rstrip("m"))
+        st.info("Construyendo dataset con tramos de alta actividad...")
+        windows = find_high_activity_windows(selected_symbols, timeframe_min)
+        if windows:
+            st.write("Ventanas ejemplo:")
+            for s, e in windows[:5]:
+                st.write(f"{datetime.utcfromtimestamp(s/1000)} → {datetime.utcfromtimestamp(e/1000)}")
         ex = get_exchange(use_testnet=use_testnet)
-        from datetime import datetime, timezone
-        since_ms = None
-        if since:
-            try:
-                dt = datetime.fromisoformat(since.replace("Z","")).replace(tzinfo=timezone.utc)
-                since_ms = int(dt.timestamp()*1000)
-            except Exception:
-                since_ms = None
         for sym in selected_symbols:
-            df = fetch_ohlcv(ex, sym, since=since_ms)
-            tf = df.attrs.get("timeframe", cfg.get("timeframe", "1m"))
-            cfg["timeframe"] = tf
-            path = save_history(df, str(raw_dir), "binance", sym, tf)
-            st.success(f"Guardado: {path}")
+            parts = []
+            for s, e in windows:
+                limit = int((e - s) / (timeframe_min * 60 * 1000))
+                try:
+                    df = fetch_ohlcv(ex, sym, timeframe=tf_str, since=s, limit=limit)
+                    parts.append(df)
+                except Exception as err:
+                    st.warning(f"Fallo {sym}: {err}")
+            if parts:
+                merged = pd.concat(parts)
+                tf = merged.attrs.get("timeframe", tf_str)
+                cfg["timeframe"] = tf
+                path = save_history(merged, str(raw_dir), "binance", sym, tf)
+                st.success(f"Guardado: {path}")
+        total_hours = sum((e - s) // 3600000 for s, e in windows)
+        st.info(f"Ventanas total: {total_hours}h")
     except Exception as e:
         st.error(f"Error en descarga: {e}")
 
