@@ -182,6 +182,7 @@ def main() -> None:
 
     reports_root = paths.reports_dir()
     exp_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+
     run_dir = reports_root / exp_id
     ensure_dir(paths.posix(run_dir))
 
