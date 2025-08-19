@@ -23,6 +23,7 @@ class BinanceMeta:
         self.api_key = api_key or ""
         self.api_secret = api_secret or ""
         self.use_testnet = use_testnet
+        self._filters_cache: Dict[str, Dict[str, float]] = {}
 
     def get_account_trade_fees(self) -> Dict[str, Dict[str, float]]:
         """Return maker/taker fees per symbol.
@@ -71,3 +72,54 @@ class BinanceMeta:
             return {"SPOT": {"maker": float(f.get("maker", 0.001)), "taker": float(f.get("taker", 0.001))}}
         except Exception:
             return {"SPOT": {"maker": 0.001, "taker": 0.001}}
+
+    def get_symbol_filters(self, symbol: str) -> Dict[str, float]:
+        """Return price/lot/minNotional filters for *symbol*.
+
+        Results are cached per symbol to avoid repeatedly querying the
+        ``/api/v3/exchangeInfo`` endpoint.
+        """
+
+        if symbol in self._filters_cache:
+            return self._filters_cache[symbol]
+
+        base = "https://testnet.binance.vision" if self.use_testnet else "https://api.binance.com"
+        endpoint = "/api/v3/exchangeInfo"
+        params = {"symbol": symbol.replace("/", "")}
+
+        try:
+            resp = requests.get(base + endpoint, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json().get("symbols", [])
+            if data:
+                filt = {}
+                for f in data[0].get("filters", []):
+                    ft = f.get("filterType")
+                    if ft == "PRICE_FILTER":
+                        filt["tickSize"] = float(f.get("tickSize", 0.0))
+                    elif ft == "LOT_SIZE":
+                        filt["stepSize"] = float(f.get("stepSize", 0.0))
+                    elif ft == "MIN_NOTIONAL":
+                        filt["minNotional"] = float(f.get("minNotional", 0.0))
+                if filt:
+                    self._filters_cache[symbol] = filt
+                    return filt
+        except Exception as exc:  # pragma: no cover - network issues
+            logger.warning("exchangeInfo API failed: %s", exc)
+
+        # fall back to config defaults
+        try:
+            with open("configs/default.yaml", "r", encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh)
+            f = cfg.get("filters", {})
+            fallback = {
+                "tickSize": float(f.get("tickSize", 0.0)),
+                "stepSize": float(f.get("stepSize", 1.0)),
+                "minNotional": float(cfg.get("min_notional_usd", 0.0)),
+            }
+            self._filters_cache[symbol] = fallback
+            return fallback
+        except Exception:
+            fallback = {"tickSize": 0.0, "stepSize": 1.0, "minNotional": 0.0}
+            self._filters_cache[symbol] = fallback
+            return fallback

@@ -23,6 +23,33 @@ def test_binance_meta_parses_response(monkeypatch):
     assert fees["BTCUSDT"]["taker"] == 0.002
     assert fees["BTCUSDT"]["maker"] == 0.001
 
+def test_symbol_filters_cached(monkeypatch):
+    calls = []
+
+    def fake_get(url, params=None, timeout=10):
+        calls.append(1)
+
+        return DummyResp(
+            {
+                "symbols": [
+                    {
+                        "symbol": "BTCUSDT",
+                        "filters": [
+                            {"filterType": "PRICE_FILTER", "tickSize": "0.01"},
+                            {"filterType": "LOT_SIZE", "stepSize": "0.001"},
+                            {"filterType": "MIN_NOTIONAL", "minNotional": "10"},
+                        ],
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr('src.exchange.binance_meta.requests.get', fake_get)
+    meta = BinanceMeta("k", "s")
+    f1 = meta.get_symbol_filters("BTCUSDT")
+    f2 = meta.get_symbol_filters("BTCUSDT")
+    assert calls.count(1) == 1
+    assert f1 == f2 == {"tickSize": 0.01, "stepSize": 0.001, "minNotional": 10.0}
 
 def test_binance_meta_fallback(monkeypatch):
     def raise_exc(*args, **kwargs):
