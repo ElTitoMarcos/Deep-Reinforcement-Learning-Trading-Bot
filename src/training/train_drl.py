@@ -32,6 +32,7 @@ from ..utils.config import load_config
 from ..utils.data_io import load_table
 from ..utils.logging import ensure_logger, config_hash
 from ..utils.paths import get_raw_dir, get_checkpoints_dir, ensure_dirs_exist
+from ..utils.device import get_device, set_cpu_threads
 from ..policies.value_based import ValueBasedPolicy
 
 
@@ -269,12 +270,18 @@ def train_dqn(
 # PPO via SB3 (optional) ----------------------------------------------------
 
 
-def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str) -> str:
+def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str, device: str) -> str:
     from stable_baselines3 import PPO  # pragma: no cover - optional dependency
 
     os.makedirs(outdir, exist_ok=True)
     ppo_cfg = cfg.get("ppo", {})
-    model = PPO("MlpPolicy", env, verbose=1, learning_rate=ppo_cfg.get("learning_rate", 3e-4))
+    model = PPO(
+        "MlpPolicy",
+        env,
+        verbose=1,
+        learning_rate=ppo_cfg.get("learning_rate", 3e-4),
+        device=device,
+    )
     model.learn(total_timesteps=timesteps)
     path = os.path.join(outdir, "ppo_model.zip")
     model.save(path)
@@ -311,6 +318,19 @@ def main() -> None:
         obs_dim=int(env.observation_space.shape[0]),
         actions=int(env.action_space.n),
     )
+    device = get_device()
+    if device == "cuda":
+        import torch  # local import to avoid unnecessary dependency on CPU-only
+
+        name = torch.cuda.get_device_name(0)
+        logger.log("INFO", "device", type="cuda", name=name)
+        print(f"Using device: CUDA ({name})")
+    else:
+        threads = set_cpu_threads()
+        logger.log("INFO", "device", type="cpu", threads=threads)
+        print(f"Using device: CPU ({threads} threads)")
+    cfg.setdefault("dqn", {})["device"] = device
+    cfg.setdefault("ppo", {})["device"] = device
     if args.algo_reason:
         logger.log("INFO", "auto_algo", algo=args.algo, reason=args.algo_reason)
 
@@ -349,11 +369,11 @@ def main() -> None:
     elif algo_key == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
+        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir, device=device)
     elif algo_key == "hybrid":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
+        ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir, device=device)
         dqn_path = train_value_dqn(
             env, cfg, args.timesteps, outdir=ckpt_dir, checkpoint_freq=args.checkpoint_freq
         )

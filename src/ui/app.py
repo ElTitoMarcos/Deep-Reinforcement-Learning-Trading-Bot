@@ -3,7 +3,9 @@ from datetime import datetime
 import streamlit as st
 
 from src.utils.config import load_config
-from src.utils.paths import ensure_dirs_exist, get_raw_dir
+from src.utils.paths import ensure_dirs_exist, get_raw_dir, get_reports_dir
+from src.reports.human_friendly import render_panel
+from src.utils.device import get_device, set_cpu_threads
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, save_history
 from src.data.volatility_windows import find_high_activity_windows
 from src.data.symbol_discovery import discover_symbols
@@ -17,6 +19,16 @@ CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 st.set_page_config(page_title="DRL Trading Config", layout="wide")
 
 st.title("⚙️ Configuración DRL Trading")
+
+device = get_device()
+if device == "cuda":
+    import torch
+
+    name = torch.cuda.get_device_name(0)
+    st.sidebar.success(f"Dispositivo: CUDA ({name})")
+else:
+    threads = set_cpu_threads()
+    st.sidebar.info(f"Dispositivo: CPU ({threads} hilos)")
 
 with st.sidebar:
     st.header("Ajustes globales")
@@ -322,7 +334,24 @@ if st.button("📈 Evaluar"):
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
-        st.code(res.stdout or "", language="bash")
+        logs = res.stdout or ""
+        if logs:
+            st.expander("Logs").code(logs, language="bash")
+
+        reports_root = get_reports_dir(cfg)
+        run_dirs = sorted(reports_root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if run_dirs:
+            latest = run_dirs[0]
+            try:
+                with open(latest / "metrics.json") as f:
+                    metrics = json.load(f)
+                render_panel(metrics)
+                st.caption(f"Resumen guardado en {latest}")
+            except Exception as err:
+                st.error(f"No se pudo leer métricas: {err}")
+        else:
+            st.warning("No hay reportes disponibles")
+
         if res.stderr:
             st.error(res.stderr)
     except Exception as e:
