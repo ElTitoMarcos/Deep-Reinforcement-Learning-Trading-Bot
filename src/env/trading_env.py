@@ -16,27 +16,48 @@ import pandas as pd
 import yaml
 import logging
 
+try:  # pragma: no cover - optional gym dependency
+    import gymnasium as gym
+    from gymnasium import spaces
+except Exception:  # pragma: no cover - optional gym dependency
+    try:
+        import gym
+        from gym import spaces  # type: ignore[no-redef]
+    except Exception:  # pragma: no cover - fallback when gym is unavailable
+        gym = None  # type: ignore[assignment]
+
+        @dataclass
+        class _Space:
+            """Simple stand-in for a gym ``Space`` object."""
+
+            shape: Tuple[int, ...]
+            dtype: Any = np.float32
+
+        @dataclass
+        class _Discrete:
+            """Minimal discrete space (``n`` possible integer actions)."""
+
+            n: int
+            dtype: Any = np.int64
+
+        def _box(*, low: Any, high: Any, shape: Tuple[int, ...], dtype: Any = np.float32) -> _Space:
+            return _Space(shape, dtype)
+
+        def _discrete(n: int, dtype: Any = np.int64) -> _Discrete:
+            return _Discrete(n, dtype)
+
+        class _Spaces:  # minimal module-like container
+            Box = staticmethod(_box)
+            Discrete = staticmethod(_discrete)
+
+        spaces = _Spaces()  # type: ignore[assignment]
+
 from ..utils.orderbook import compute_walls, distancia_a_muralla
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass
-class _Space:
-    """Simple stand-in for a gym ``Space`` object."""
-
-    shape: Tuple[int, ...]
-    dtype: Any = np.float32
-
-@dataclass
-class _Discrete:
-    """Minimal discrete space (``n`` possible integer actions)."""
-
-    n: int
-    dtype: Any = np.int64
-
-
-class TradingEnv:
+class TradingEnv(gym.Env if 'gym' in globals() and gym is not None else object):
     def __init__(
         self,
         df: pd.DataFrame,
@@ -66,9 +87,11 @@ class TradingEnv:
         self._feature_histories: List[List[float]] = [[] for _ in range(8)]
 
         # observation space: 8 engineered features, float32
-        self.observation_space = _Space((8,), np.float32)
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf, shape=(8,), dtype=np.float32
+        )
         # discrete action space: 0=hold, 1=open_long, 2=close
-        self.action_space = _Discrete(3, np.int64)
+        self.action_space = spaces.Discrete(3, dtype=np.int64)
         # in the future this could include a continuous component (0..1)
         # to express position sizing alongside the discrete action
         # config ---------------------------------------------------------
