@@ -57,12 +57,12 @@ def simulate_1s_from_1m(df_1m: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["ts", "open", "high", "low", "close", "volume"])
 
 
-def get_exchange(name: str):
-    """Instantiate a ``ccxt`` exchange by *name*.
+def get_exchange(name: str | None = None, *, use_testnet: bool | None = None):
+    """Return a ``ccxt`` Binance client.
 
-    The library is imported lazily so environments without ``ccxt`` can still
-    import this module for testing purposes.  An informative ``ImportError`` is
-    raised if the dependency is missing when the function is used.
+    ``name`` is kept for backwards compatibility and must be ``\"binance\"`` if
+    provided.  Testnet mode is enabled when ``use_testnet`` is ``True`` or when
+    the ``BINANCE_USE_TESTNET`` environment variable is truthy.
     """
 
     try:  # pragma: no cover - exercised only when ccxt is available
@@ -70,15 +70,22 @@ def get_exchange(name: str):
     except Exception as exc:  # pragma: no cover - missing optional dep
         raise ImportError("ccxt is required to create exchange clients") from exc
 
-    try:
-        cls = getattr(ccxt, name)
-    except AttributeError as exc:
-        raise ValueError(f"unknown exchange: {name}") from exc
+    if name and name.lower() != "binance":
+        raise ValueError("only binance exchange is supported")
 
-    ex = cls()
-    try:
+    if use_testnet is None:
+        use_testnet = os.getenv("BINANCE_USE_TESTNET", "").lower() in ("1", "true", "yes")
+
+    ex = ccxt.binance({"enableRateLimit": True})
+    if use_testnet:  # pragma: no cover - network/ccxt quirks
+        try:
+            ex.set_sandbox_mode(True)
+        except Exception:
+            ex.urls["api"] = ex.urls.get("test", ex.urls.get("api"))
+
+    try:  # pragma: no cover - network/ccxt quirks
         ex.load_markets()
-    except Exception:  # pragma: no cover - network/ccxt quirks
+    except Exception:
         pass
     return ex
 

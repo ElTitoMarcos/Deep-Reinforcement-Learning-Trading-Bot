@@ -1,10 +1,11 @@
 from __future__ import annotations
-import argparse, os
+import argparse
 import pandas as pd
 from .simulator import simulate
 from ..policies.router import get_policy
-from ..utils.data_io import load_table, ensure_dir
+from ..utils.data_io import load_table
 from ..utils.config import load_config
+from ..utils.paths import get_raw_dir, get_reports_dir, ensure_dirs_exist
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
 from datetime import datetime, timezone
@@ -18,8 +19,8 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    paths = cfg.get("paths", {})
-    data_root = paths.get("raw_dir", "data/raw")
+    ensure_dirs_exist(cfg)
+    data_root = get_raw_dir(cfg)
     exchange = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     timeframe = cfg.get("timeframe", "1m")
@@ -27,7 +28,10 @@ def main():
     if args.data:
         df = load_table(args.data)
     else:
-        path = os.path.join(data_root, exchange, symbol.replace("/","-"), f"{timeframe}.parquet")
+        path = data_root / exchange / symbol.replace("/","-") / f"{timeframe}.parquet"
+        if not path.exists():
+            alt = path.with_suffix(".csv")
+            path = alt if alt.exists() else path
         df = load_table(path)
 
     pol = get_policy(args.policy)
@@ -61,27 +65,27 @@ def main():
         f"MaxDD: {metrics['max_drawdown']:.3%} | HitRatio: {metrics['hit_ratio']:.2%} | Turnover: {metrics['turnover']}"
     )
 
-    reports_root = paths.get("reports_dir", "reports")
+    reports_root = get_reports_dir(cfg)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-    run_dir = os.path.join(reports_root, run_id)
-    ensure_dir(run_dir)
+    run_dir = reports_root / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
 
     # save metrics
-    with open(os.path.join(run_dir, "metrics.json"), "w") as f:
+    with open(run_dir / "metrics.json", "w") as f:
         json.dump(metrics, f, indent=2)
 
     # save trades
-    pd.DataFrame(trades).to_csv(os.path.join(run_dir, "trades.csv"), index=False)
+    pd.DataFrame(trades).to_csv(run_dir / "trades.csv", index=False)
 
     # save equity curve
-    equity_curve.to_csv(os.path.join(run_dir, "equity.csv"), index_label="idx", header=["equity"])
+    equity_curve.to_csv(run_dir / "equity.csv", index_label="idx", header=["equity"])
     plt.figure()
     equity_curve.plot()
     plt.title("Equity Curve")
     plt.xlabel("trade")
     plt.ylabel("equity")
     plt.tight_layout()
-    plt.savefig(os.path.join(run_dir, "equity.png"))
+    plt.savefig(run_dir / "equity.png")
     plt.close()
 
 if __name__ == "__main__":
