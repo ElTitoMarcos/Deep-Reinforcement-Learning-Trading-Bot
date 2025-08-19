@@ -1,36 +1,30 @@
 import os
+import multiprocessing
 import torch
 
 
 def get_device() -> str:
-    """Return "cuda" if an RTX 3070 GPU is available, else "cpu".
+    """Return 'cuda' if a GPU is available, otherwise 'cpu'."""
+    return "cuda" if torch.cuda.is_available() else "cpu"
 
-    This helper prefers a specific GPU model to ensure reproducibility.  If
-    CUDA is available but the device name does not contain "3070", we default
-    to CPU to avoid unexpected slower or unsupported GPUs.
+
+def set_cpu_threads(max_threads: int | None = None) -> int:
+    """Limit PyTorch to a subset of CPU threads.
+
+    Parameters
+    ----------
+    max_threads: int | None
+        Optional upper bound for the number of threads. If ``None`` the
+        function uses all available cores minus one.
+    Returns
+    -------
+    int
+        The number of threads configured via ``torch.set_num_threads``.
     """
-    if torch.cuda.is_available():
-        try:
-            name = torch.cuda.get_device_name(0)
-            if "3070" in name:
-                return "cuda"
-        except Exception:
-            pass
-    return "cpu"
-
-
-def set_cpu_threads() -> int:
-    """Limit PyTorch to ``n_cores - 1`` threads when running on CPU.
-
-    Returns the number of threads configured.  If CUDA is available this is a
-    no-op and the current thread count is returned.
-    """
-    if get_device() == "cpu":
-        n = max(1, (os.cpu_count() or 1) - 1)
-        try:
-            torch.set_num_threads(n)
-        except Exception:
-            pass
-        os.environ["OMP_NUM_THREADS"] = str(n)
-        return n
-    return torch.get_num_threads()
+    cores = multiprocessing.cpu_count() or 1
+    target = max(1, cores - 1)
+    if max_threads is not None:
+        target = min(target, int(max_threads))
+    torch.set_num_threads(target)
+    os.environ["OMP_NUM_THREADS"] = str(target)
+    return target
