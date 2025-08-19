@@ -21,7 +21,7 @@ import os
 import json
 from dataclasses import dataclass
 from typing import Tuple
-from datetime import datetime
+from datetime import datetime, timedelta, UTC
 from pathlib import Path
 import time
 import random
@@ -192,7 +192,7 @@ def _maybe_call_llm(
 
 def save_model(agent: ValueBasedPolicy, algo: str, symbol: str) -> str:
     """Persist a trained policy to the models directory with metadata."""
-    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     fname = f"{ts}_{algo}_{symbol}.pt"
     models_dir = Path("models")
     models_dir.mkdir(exist_ok=True)
@@ -546,7 +546,7 @@ def main() -> None:
         for sym in cfg.get("symbols", []):
             since = last_watermark(sym, timeframe)
             if since is None:
-                since = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+                since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
             df_new = fetch_ohlcv_incremental(ex, sym, timeframe, since_ms=since)
             if df_new.empty:
                 continue
@@ -556,11 +556,10 @@ def main() -> None:
                 "symbol": sym,
                 "timeframe": timeframe,
                 "watermark": int(df_new["ts"].max()),
-                "obtained_at": datetime.utcnow().isoformat(),
+                "obtained_at": datetime.now(UTC).isoformat(),
             }
             with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
                 json.dump(manifest, f, indent=2)
-                
     df = load_data(cfg, args.data, args.timesteps)
     env = TradingEnv(df, cfg=cfg)
     print(f"Using fees: {cfg.get('fees', {})}")

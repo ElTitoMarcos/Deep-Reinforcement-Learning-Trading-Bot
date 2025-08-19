@@ -14,7 +14,7 @@ from ..data.ensure import ensure_ohlcv
 
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 import matplotlib.pyplot as plt
 
 def main():
@@ -148,7 +148,7 @@ def main():
     )
 
     reports_root = paths.reports_dir()
-    run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
     run_dir = reports_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
 

@@ -1,7 +1,7 @@
 from __future__ import annotations
 import os, json
 from dataclasses import dataclass, asdict
-from datetime import datetime
+from datetime import datetime, UTC
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -147,7 +147,7 @@ class ValueBasedPolicy:
         torch.save(self.q_net.state_dict(), path)
         meta = {
             "config_hash": config_hash(asdict(self.cfg)),
-            "timestamp": datetime.utcnow().isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "obs_dim": self.obs_dim,
             "n_actions": self.n_actions,
             "commit": get_commit(),

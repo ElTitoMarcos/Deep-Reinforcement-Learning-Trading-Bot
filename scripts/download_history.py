@@ -4,7 +4,7 @@ import argparse
 import os
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, UTC
 from typing import List
 
 import ccxt
@@ -25,7 +25,7 @@ def parse_since(s: str | None) -> int | None:
     if not s:
         return None
     try:
-        dt = datetime.fromisoformat(s.replace("Z", "")).replace(tzinfo=timezone.utc)
+        dt = datetime.fromisoformat(s.replace("Z", "")).replace(tzinfo=UTC)
         return int(dt.timestamp() * 1000)
     except Exception:
         return None

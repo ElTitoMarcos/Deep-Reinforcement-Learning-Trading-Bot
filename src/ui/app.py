@@ -359,7 +359,7 @@ if st.button("Obtener y validar datos"):
                     data_file = "ohlcv.csv"
             manifest = {
                 "symbol": sym,
-                "obtained_at": datetime.utcnow().isoformat(),
+                "obtained_at": datetime.now(UTC).isoformat(),
                 "source": meta.get("source"),
                 "qc": summary,
                 "data_file": data_file,
@@ -377,7 +377,7 @@ st.caption("La precisión se elige automáticamente al mínimo disponible; el mo
 st.write("Construyendo dataset con tramos de alta actividad...")
 st.write("Seleccionados: " + ", ".join(selected_symbols))
 if st.button("🔄 Actualizar datos"):
-    from datetime import datetime, timedelta, timezone
+    from datetime import datetime, UTC, timedelta
     import json
     from src.data.incremental import (
         last_watermark,
@@ -390,7 +390,7 @@ if st.button("🔄 Actualizar datos"):
     for sym in selected_symbols:
         since = last_watermark(sym, tf_str)
         if since is None:
-            since = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp() * 1000)
+            since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
         df_new = fetch_ohlcv_incremental(ex, sym, tf_str, since_ms=since)
         if df_new.empty:
             st.info(f"{sym}: sin datos nuevos")
@@ -401,7 +401,7 @@ if st.button("🔄 Actualizar datos"):
             "symbol": sym,
             "timeframe": tf_str,
             "watermark": int(df_new["ts"].max()),
-            "obtained_at": datetime.utcnow().isoformat(),
+            "obtained_at": datetime.now(UTC).isoformat(),
         }
         with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)

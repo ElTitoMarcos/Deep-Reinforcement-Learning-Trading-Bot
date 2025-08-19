@@ -24,7 +24,7 @@ import json
 import os
 import random
 import sys
-from datetime import datetime
+from datetime import datetime, UTC
 
 # Ensure project root is on ``sys.path`` when executed as a script -----------------
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -181,7 +181,8 @@ def main() -> None:
     )
 
     reports_root = paths.reports_dir()
-    exp_id = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    exp_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+
     run_dir = reports_root / exp_id
     ensure_dir(paths.posix(run_dir))
 
