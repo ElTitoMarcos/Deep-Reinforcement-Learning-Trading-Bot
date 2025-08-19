@@ -1,14 +1,16 @@
 from __future__ import annotations
 import argparse
+from pathlib import Path
 import pandas as pd
 from .simulator import simulate
 from ..policies.router import get_policy
 from ..policies.hybrid import HybridPolicy
 from ..utils.data_io import load_table
 from ..utils.config import load_config
-from ..utils.paths import get_raw_dir, get_reports_dir, ensure_dirs_exist
+from ..utils.paths import get_raw_dir, get_reports_dir, ensure_dirs_exist, raw_parquet_path
 from ..reports.human_friendly import write_readme
 from ..utils.device import get_device, set_cpu_threads
+from ..data.ensure import ensure_ohlcv
 
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
@@ -30,13 +32,18 @@ def main():
     timeframe = cfg.get("timeframe", "1m")
 
     if args.data:
-        df = load_table(args.data)
+        df = load_table(Path(args.data).as_posix())
     else:
-        path = data_root / exchange / symbol.replace("/","-") / f"{timeframe}.parquet"
+        path = raw_parquet_path(exchange, symbol, timeframe, data_root)
+        if not path.exists():
+            try:
+                ensure_ohlcv(exchange, symbol, timeframe, root=data_root)
+            except Exception as exc:
+                print(f"ensure_ohlcv failed: {exc}")
         if not path.exists():
             alt = path.with_suffix(".csv")
             path = alt if alt.exists() else path
-        df = load_table(path)
+        df = load_table(path.as_posix())
 
     fee = cfg.get("fees", {}).get("taker", 0.001)
     print(f"Using fees: {cfg.get('fees', {})}")
