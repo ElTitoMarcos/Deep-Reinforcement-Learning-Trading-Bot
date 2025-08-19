@@ -1,0 +1,125 @@
+"""Helpers for Binance account metadata."""
+from __future__ import annotations
+
+import os
+import time
+import hmac
+import hashlib
+import logging
+from typing import Dict
+
+import requests
+import yaml
+
+from src.data.ccxt_loader import get_exchange
+
+logger = logging.getLogger(__name__)
+
+
+class BinanceMeta:
+    """Lightweight client to retrieve account trade fees."""
+
+    def __init__(self, api_key: str | None, api_secret: str | None, use_testnet: bool = False):
+        self.api_key = api_key or ""
+        self.api_secret = api_secret or ""
+        self.use_testnet = use_testnet
+        self._filters_cache: Dict[str, Dict[str, float]] = {}
+
+    def get_account_trade_fees(self) -> Dict[str, Dict[str, float]]:
+        """Return maker/taker fees per symbol.
+
+        Attempts to query ``/sapi/v1/asset/tradeFee``.  On failure falls back to
+        ``ccxt`` static fees or the configured defaults.
+        """
+
+        base = "https://testnet.binance.vision" if self.use_testnet else "https://api.binance.com"
+        endpoint = "/sapi/v1/asset/tradeFee"
+        params = {"timestamp": int(time.time() * 1000)}
+        query = "&".join(f"{k}={v}" for k, v in sorted(params.items()))
+        signature = hmac.new(self.api_secret.encode(), query.encode(), hashlib.sha256).hexdigest()
+        params["signature"] = signature
+        headers = {"X-MBX-APIKEY": self.api_key}
+
+        try:
+            resp = requests.get(base + endpoint, params=params, headers=headers, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            fees: Dict[str, Dict[str, float]] = {}
+            for item in data:
+                symbol = item.get("symbol")
+                fees[symbol] = {
+                    "maker": float(item.get("makerCommission", 0.0)),
+                    "taker": float(item.get("takerCommission", 0.0)),
+                }
+            if fees:
+                return fees
+        except Exception as exc:  # pragma: no cover - network or auth issues
+            logger.warning("tradeFee API failed: %s", exc)
+
+        # fallback to ccxt static fees
+        try:
+            ex = get_exchange(use_testnet=self.use_testnet)
+            f = ex.fees.get("trading", {})
+            return {"SPOT": {"maker": float(f.get("maker", 0.001)), "taker": float(f.get("taker", 0.001))}}
+        except Exception as exc:  # pragma: no cover - ccxt missing
+            logger.warning("ccxt fallback failed: %s", exc)
+
+        # final fallback to config defaults
+        try:
+            with open("configs/default.yaml", "r", encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh)
+            f = cfg.get("fees", {})
+            return {"SPOT": {"maker": float(f.get("maker", 0.001)), "taker": float(f.get("taker", 0.001))}}
+        except Exception:
+            return {"SPOT": {"maker": 0.001, "taker": 0.001}}
+
+    def get_symbol_filters(self, symbol: str) -> Dict[str, float]:
+        """Return price/lot/minNotional filters for *symbol*.
+
+        Results are cached per symbol to avoid repeatedly querying the
+        ``/api/v3/exchangeInfo`` endpoint.
+        """
+
+        if symbol in self._filters_cache:
+            return self._filters_cache[symbol]
+
+        base = "https://testnet.binance.vision" if self.use_testnet else "https://api.binance.com"
+        endpoint = "/api/v3/exchangeInfo"
+        params = {"symbol": symbol.replace("/", "")}
+
+        try:
+            resp = requests.get(base + endpoint, params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json().get("symbols", [])
+            if data:
+                filt = {}
+                for f in data[0].get("filters", []):
+                    ft = f.get("filterType")
+                    if ft == "PRICE_FILTER":
+                        filt["tickSize"] = float(f.get("tickSize", 0.0))
+                    elif ft == "LOT_SIZE":
+                        filt["stepSize"] = float(f.get("stepSize", 0.0))
+                    elif ft == "MIN_NOTIONAL":
+                        filt["minNotional"] = float(f.get("minNotional", 0.0))
+                if filt:
+                    self._filters_cache[symbol] = filt
+                    return filt
+        except Exception as exc:  # pragma: no cover - network issues
+            logger.warning("exchangeInfo API failed: %s", exc)
+
+        # fall back to config defaults
+        try:
+            with open("configs/default.yaml", "r", encoding="utf-8") as fh:
+                cfg = yaml.safe_load(fh)
+            f = cfg.get("filters", {})
+            fallback = {
+                "tickSize": float(f.get("tickSize", 0.0)),
+                "stepSize": float(f.get("stepSize", 1.0)),
+                "minNotional": float(cfg.get("min_notional_usd", 0.0)),
+            }
+            self._filters_cache[symbol] = fallback
+            return fallback
+        except Exception:
+            fallback = {"tickSize": 0.0, "stepSize": 1.0, "minNotional": 0.0}
+            self._filters_cache[symbol] = fallback
+            return fallback

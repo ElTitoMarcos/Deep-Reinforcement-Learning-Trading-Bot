@@ -21,9 +21,9 @@ dependencies = [
     "tqdm>=4.65",
     "matplotlib>=3.7",
     "orjson>=3.9.7",
+    "torch>=2.2; python_version>='3.9'",
     # Optional
     "stable-baselines3>=2.3.2; python_version>='3.9'",
-    "torch>=2.2; python_version>='3.9'",
     "polars>=1.0.0",
     "pyarrow>=15.0.0",
 ]
