@@ -3,7 +3,7 @@ from datetime import datetime
 import streamlit as st
 
 from src.utils.config import load_config
-from src.utils.data_io import load_table
+from src.utils.paths import ensure_dirs_exist, get_raw_dir
 from src.data.ccxt_loader import get_exchange, fetch_ohlcv, simulate_1s_from_1m, save_history
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
@@ -19,27 +19,18 @@ with st.sidebar:
     # Cargar YAML
     try:
         cfg = load_config(CONFIG_PATH)
+        ensure_dirs_exist(cfg)
     except Exception as e:
         st.error(f"No se pudo cargar {CONFIG_PATH}: {e}")
         cfg = {}
 
-    paths = cfg.get("paths", {})
-    logs_dir = paths.get("logs_dir", "logs")
-    checkpoints_dir = paths.get("checkpoints_dir", "checkpoints")
-    raw_dir = paths.get("raw_dir", "data/raw")
-    reports_dir = paths.get("reports_dir", "reports")
+    paths_cfg = cfg.get("paths", {})
+    raw_dir = get_raw_dir(cfg)
+    use_testnet_default = bool(cfg.get("binance_use_testnet", False))
+    mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
+    use_testnet = mode == "Testnet"
+    os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
 
-    st.caption("Rutas")
-    colp1, colp2 = st.columns(2)
-    with colp1:
-        raw_dir = st.text_input("Data raw dir", value=raw_dir, key="raw_dir")
-        logs_dir = st.text_input("Logs dir", value=logs_dir, key="logs_dir")
-    with colp2:
-        checkpoints_dir = st.text_input("Checkpoints dir", value=checkpoints_dir, key="ckpt_dir")
-        reports_dir = st.text_input("Reports dir", value=reports_dir, key="reports_dir")
-
-    st.caption("Exchange")
-    ex_name = st.text_input("Exchange (ccxt)", value=cfg.get("exchange","binance"), key="exchange_ccxt")
     symbols = st.text_input("Símbolos (espacio-separado)", value=" ".join(cfg.get("symbols") or ["BTC/USDT"]), key="symbols_space")
     timeframe = st.selectbox("Timeframe", ["1s","1m","3m","5m","15m"], index=1)
 
@@ -83,10 +74,11 @@ with st.sidebar:
     if st.button("💾 Guardar config YAML"):
         import yaml
         new_cfg = {
-            "exchange": ex_name,
+            "exchange": "binance",
+            "binance_use_testnet": use_testnet,
             "symbols": symbols.split(),
             "timeframe": timeframe,
-            "fees": {"taker": fees_taker, "maker": cfg.get("fees",{}).get("maker", fees_taker)},
+            "fees": {"taker": fees_taker, "maker": cfg.get("fees", {}).get("maker", fees_taker)},
             "slippage": slippage,
             "min_notional_usd": min_notional,
             "filters": {"tickSize": tick_size, "stepSize": step_size},
@@ -101,9 +93,7 @@ with st.sidebar:
                 "epsilon_end": dqn_eps_e, "epsilon_decay_steps": int(dqn_eps_d)
             },
             "reward_weights": {"pnl": w_pnl, "turnover_penalty": w_turn, "drawdown_penalty": w_dd, "volatility_penalty": w_vol},
-            "paths": {
-                "raw_dir": raw_dir, "logs_dir": logs_dir, "reports_dir": reports_dir, "checkpoints_dir": checkpoints_dir
-            },
+            "paths": paths_cfg,
         }
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
         with open(CONFIG_PATH, "w", encoding="utf-8") as f:
@@ -111,18 +101,16 @@ with st.sidebar:
         st.success(f"Guardado {CONFIG_PATH}")
 
 st.subheader("📥 Datos")
-col1, col2, col3 = st.columns(3)
+col1, col2 = st.columns(2)
 with col1:
-    ex_name_run = st.text_input("Exchange para descarga", value=ex_name, key="exchange_dl")
-with col2:
     dl_timeframe = st.selectbox("Timeframe descarga", ["1s","1m","3m","5m","15m"], index=1, key="dl_tf")
-with col3:
+with col2:
     since = st.text_input("Desde (ISO UTC, ej. 2024-01-01)", value="", key="since_iso")
 
 symbols_run = st.text_input("Símbolos a descargar", value=symbols, key="symbols_dl")
 if st.button("⬇️ Descargar histórico"):
     try:
-        ex = get_exchange(ex_name_run)
+        ex = get_exchange(use_testnet=use_testnet)
         from datetime import datetime, timezone
         since_ms = None
         if since:
@@ -137,7 +125,7 @@ if st.button("⬇️ Descargar histórico"):
                 st.warning(f"1s no disponible en {sym}; simulando desde 1m")
                 df_1m = fetch_ohlcv(ex, sym, timeframe="1m", since=since_ms)
                 df = simulate_1s_from_1m(df_1m)
-            path = save_history(df, raw_dir, ex_name_run, sym, dl_timeframe)
+            path = save_history(df, str(raw_dir), "binance", sym, dl_timeframe)
             st.success(f"Guardado: {path}")
     except Exception as e:
         st.error(f"Error en descarga: {e}")
@@ -148,12 +136,10 @@ with colt1:
     algo_run = st.selectbox("Algoritmo", ["ppo","dqn"], index=0 if algo=="ppo" else 1)
     timesteps = st.number_input("Timesteps", value=20000, step=1000)
 with colt2:
-    data_override = st.text_input("Ruta datos (opcional)", value="", key="train_data_override")
+    st.empty()
 
 if st.button("🚀 Entrenar"):
     cmd = ["python", "-m", "src.training.train_drl", "--config", CONFIG_PATH, "--algo", algo_run, "--timesteps", str(int(timesteps))]
-    if data_override:
-        cmd.extend(["--data", data_override])
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -168,12 +154,10 @@ colb1, colb2 = st.columns(2)
 with colb1:
     policy = st.selectbox("Política", ["deterministic","stochastic","dqn"])
 with colb2:
-    data_eval = st.text_input("Ruta datos (opcional)", value="", key="eval_data_override")
+    st.empty()
 
 if st.button("📈 Evaluar"):
     cmd = ["python", "-m", "src.backtest.evaluate", "--config", CONFIG_PATH, "--policy", policy]
-    if data_eval:
-        cmd.extend(["--data", data_eval])
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
