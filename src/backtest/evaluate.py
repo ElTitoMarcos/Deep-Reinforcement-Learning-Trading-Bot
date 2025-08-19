@@ -7,7 +7,7 @@ from ..policies.router import get_policy
 from ..policies.hybrid import HybridPolicy
 from ..utils.data_io import load_table
 from ..utils.config import load_config
-from ..utils.paths import get_raw_dir, get_reports_dir, ensure_dirs_exist, raw_parquet_path
+from ..utils import paths
 from ..reports.human_friendly import write_readme
 from ..utils.device import get_device, set_cpu_threads
 from ..data.ensure import ensure_ohlcv
@@ -25,25 +25,24 @@ def main():
     args = ap.parse_args()
 
     cfg = load_config(args.config)
-    ensure_dirs_exist(cfg)
-    data_root = get_raw_dir(cfg)
+    paths.ensure_dirs_exist()
     exchange = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     timeframe = cfg.get("timeframe", "1m")
 
     if args.data:
-        df = load_table(Path(args.data).as_posix())
+        df = load_table(paths.posix(Path(args.data)))
     else:
-        path = raw_parquet_path(exchange, symbol, timeframe, data_root)
+        path = paths.raw_parquet_path(exchange, symbol, timeframe)
         if not path.exists():
             try:
-                ensure_ohlcv(exchange, symbol, timeframe, root=data_root)
+                ensure_ohlcv(exchange, symbol, timeframe)
             except Exception as exc:
                 print(f"ensure_ohlcv failed: {exc}")
         if not path.exists():
             alt = path.with_suffix(".csv")
             path = alt if alt.exists() else path
-        df = load_table(path.as_posix())
+        df = load_table(paths.posix(path))
 
     fee = cfg.get("fees", {}).get("taker", 0.001)
     print(f"Using fees: {cfg.get('fees', {})}")
@@ -148,7 +147,7 @@ def main():
         f"MaxDD: {metrics['max_drawdown']:.3%} | HitRatio: {metrics['hit_ratio']:.2%} | Turnover: {metrics['turnover']}"
     )
 
-    reports_root = get_reports_dir(cfg)
+    reports_root = paths.reports_dir()
     run_id = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     run_dir = reports_root / run_id
     run_dir.mkdir(parents=True, exist_ok=True)

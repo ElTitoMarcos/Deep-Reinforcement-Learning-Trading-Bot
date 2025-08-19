@@ -5,18 +5,24 @@ from pathlib import Path
 import pandas as pd
 import yaml
 
+from src.utils import paths
+
 
 def test_evaluate_creates_report(tmp_path):
+    raw = tmp_path / 'raw'
+    rep = tmp_path / 'reports'
+    ckpt = tmp_path / 'checkpoints'
+    paths.RAW_DIR = raw
+    paths.REPORTS_DIR = rep
+    paths.CHECKPOINTS_DIR = ckpt
+    paths.ensure_dirs_exist()
+
     cfg = yaml.safe_load(Path('configs/default.yaml').read_text())
     cfg['fees'] = {'taker': 0.005, 'maker': 0.004}
-    cfg_paths = cfg.setdefault('paths', {})
-    cfg_paths['raw_dir'] = str(tmp_path / 'raw')
-    cfg_paths['reports_dir'] = str(tmp_path / 'reports')
-    cfg_paths['checkpoints_dir'] = str(tmp_path / 'checkpoints')
     cfg_path = tmp_path / 'cfg.yaml'
     cfg_path.write_text(yaml.safe_dump(cfg))
 
-    data_dir = Path(cfg_paths['raw_dir']) / 'binance' / 'BTC-USDT'
+    data_dir = paths.RAW_DIR / 'binance' / paths.symbol_to_dir('BTC/USDT')
     data_dir.mkdir(parents=True)
     df = pd.DataFrame(
         {
@@ -30,6 +36,9 @@ def test_evaluate_creates_report(tmp_path):
 
     env = os.environ.copy()
     env['MPLBACKEND'] = 'Agg'
+    env['DRLTB_RAW_DIR'] = str(raw)
+    env['DRLTB_REPORTS_DIR'] = str(rep)
+    env['DRLTB_CHECKPOINTS_DIR'] = str(ckpt)
     res = subprocess.run(
         ['python', '-m', 'src.backtest.evaluate', '--config', str(cfg_path), '--policy', 'deterministic'],
         check=True,
@@ -40,7 +49,7 @@ def test_evaluate_creates_report(tmp_path):
     )
     assert '0.005' in res.stdout
 
-    reports_dir = Path(cfg_paths['reports_dir'])
+    reports_dir = paths.REPORTS_DIR
     runs = list(reports_dir.iterdir())
     assert len(runs) == 1
     run_dir = runs[0]

@@ -10,6 +10,7 @@ from typing import List
 import ccxt
 import numpy as np
 import pandas as pd
+from pathlib import Path
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT not in sys.path:
@@ -17,6 +18,7 @@ if ROOT not in sys.path:
 
 from src.utils.logging import ensure_logger
 from src.utils.data_io import save_ohlcv, validate_ohlcv, resample_to, fill_small_gaps
+from src.utils import paths
 
 
 def parse_since(s: str | None) -> int | None:
@@ -99,7 +101,7 @@ def main() -> None:
     ap.add_argument("--symbols", nargs="+", required=True)
     ap.add_argument("--timeframe", type=str, choices=["1m", "1s"], default="1m")
     ap.add_argument("--since", type=str, default=None, help="ISO date (UTC) p.ej. 2024-01-01")
-    ap.add_argument("--root", type=str, default="data/raw")
+    ap.add_argument("--root", type=str, default=paths.posix(paths.RAW_DIR))
     ap.add_argument("--rate-limit", type=float, default=1.0, help="seconds between requests")
     ap.add_argument("--retries", type=int, default=5)
     ap.add_argument("--seed", type=int, default=0, help="seed for synthetic data")
@@ -108,6 +110,9 @@ def main() -> None:
     logger = ensure_logger(None)
 
     since_ms = parse_since(args.since)
+
+    paths.RAW_DIR = Path(args.root)
+    paths.ensure_dirs_exist()
 
     for sym in args.symbols:
         ex_name = args.exchange
@@ -153,7 +158,7 @@ def main() -> None:
             logger.error("validation_failed", exchange=ex_name, symbol=sym, error=str(e))
             continue
 
-        path = save_ohlcv(df, args.root, ex_name, sym, args.timeframe)
+        path = save_ohlcv(df, ex_name, sym, args.timeframe)
         logger.info("saved", path=path, rows=len(df))
 
 

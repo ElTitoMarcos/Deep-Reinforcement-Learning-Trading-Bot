@@ -10,8 +10,11 @@ from __future__ import annotations
 import os
 import logging
 from typing import Any, Optional
+from pathlib import Path
 
 import pandas as pd
+
+from ..utils import paths
 
 __all__ = [
     "simulate_1s_from_1m",
@@ -129,13 +132,14 @@ def fetch_ohlcv(
 
 
 def save_history(
-    df: pd.DataFrame, root_dir: str, exchange: str, symbol: str, timeframe: str
+    df: pd.DataFrame, root_dir: os.PathLike[str] | str, exchange: str, symbol: str, timeframe: str
 ) -> str:
     """Persist OHLCV *df* as CSV and return the output path."""
 
-    os.makedirs(root_dir, exist_ok=True)
-    fname = f"{exchange}_{symbol.replace('/', '-')}_{timeframe}.csv"
-    path = os.path.join(root_dir, fname)
-    df.to_csv(path, index=False)
-    return path
+    root = Path(root_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    fname = f"{exchange}_{paths.symbol_to_dir(symbol)}_{timeframe}.csv"
+    out = root / fname
+    df.to_csv(paths.posix(out), index=False)
+    return paths.posix(out)
 
