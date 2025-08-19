@@ -110,6 +110,10 @@ def main() -> None:
 
     logger = ensure_logger(None)
 
+    # normalize the quote currency to uppercase so that comparisons are
+    # case-insensitive regardless of how the user provides the argument.
+    args.quote = args.quote.upper()
+
     if ccxt is None:
         raise RuntimeError("ccxt no instalado. `pip install ccxt`.")
 
@@ -129,7 +133,9 @@ def main() -> None:
     for sym, m in markets.items():
         if m.get("spot") is not True:
             continue
-        if m.get("quote") != args.quote:
+        # some exchanges may return the quote in lowercase; guard against it
+        quote = (m.get("quote") or "").upper()
+        if quote != args.quote:
             continue
         if not m.get("active", True):
             continue

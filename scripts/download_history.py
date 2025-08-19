@@ -16,7 +16,7 @@ if ROOT not in sys.path:
     sys.path.append(ROOT)
 
 from src.utils.logging import ensure_logger
-from src.utils.data_io import save_ohlcv
+from src.utils.data_io import save_ohlcv, validate_ohlcv, resample_to, fill_small_gaps
 
 
 def parse_since(s: str | None) -> int | None:
@@ -137,10 +137,21 @@ def main() -> None:
             df = synthesize_1s_from_1m(df_1m, seed=args.seed)
             source = "synthetic"
 
+        df = resample_to(df, args.timeframe)
+        df, filled = fill_small_gaps(df)
+        if filled > 0:
+            logger.warning("filled_small_gaps", symbol=sym, ticks=filled)
+
         df["exchange"] = ex_name
         df["symbol"] = sym
         df["timeframe"] = args.timeframe
         df["source"] = source
+
+        try:
+            df = validate_ohlcv(df)
+        except ValueError as e:
+            logger.error("validation_failed", exchange=ex_name, symbol=sym, error=str(e))
+            continue
 
         path = save_ohlcv(df, args.root, ex_name, sym, args.timeframe)
         logger.info("saved", path=path, rows=len(df))
