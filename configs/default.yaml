@@ -23,7 +23,8 @@ ppo:
   gamma: 0.99
   gae_lambda: 0.95
   clip_range: 0.2
-  ent_coef: 0.01
+  entropy_start: 0.01
+  entropy_end: 0.0
 dqn:
   learning_rate: 1.0e-3
   gamma: 0.99

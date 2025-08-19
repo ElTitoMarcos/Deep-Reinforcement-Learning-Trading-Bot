@@ -24,6 +24,25 @@ EXPLORATION_MAP = {
     "market_cap_or_relative_value": 0.3,  # high exploration
 }
 
+# Extra multiplier applied to exploration schedules depending on the
+# provenance of the features.  New feature sets encourage more exploration.
+EXPLORATION_SCALE = {
+    "known": 1.0,
+    "new_feature_set": 1.2,
+}
+
+
+def exploration_scale(data_mode: str | None) -> float:
+    """Return multiplicative exploration factor for ``data_mode``.
+
+    Parameters
+    ----------
+    data_mode : str | None
+        Feature descriptor.  ``None`` or unknown values map to 1.0.
+    """
+
+    return EXPLORATION_SCALE.get((data_mode or "known").lower(), 1.0)
+
 
 def get_policy(
     data_mode: str,
