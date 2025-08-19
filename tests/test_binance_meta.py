@@ -1,4 +1,3 @@
-import types
 from src.exchange.binance_meta import BinanceMeta
 
 
@@ -55,10 +54,27 @@ def test_binance_meta_fallback(monkeypatch):
     def raise_exc(*args, **kwargs):
         raise Exception("boom")
     monkeypatch.setattr('src.exchange.binance_meta.requests.get', raise_exc)
-    class DummyEx:
-        fees = {"trading": {"maker": 0.005, "taker": 0.006}}
-    monkeypatch.setattr('src.exchange.binance_meta.get_exchange', lambda **kwargs: DummyEx())
     meta = BinanceMeta("k", "s")
     fees = meta.get_account_trade_fees()
-    assert fees["SPOT"]["maker"] == 0.005
-    assert fees["SPOT"]["taker"] == 0.006
+    assert fees["SPOT"]["maker"] == 0.001
+    assert fees["SPOT"]["taker"] == 0.001
+    assert meta.last_fee_origin == "Fallback"
+
+
+def test_binance_meta_testnet_404(monkeypatch, caplog):
+    class Dummy404:
+        status_code = 404
+
+        def json(self):
+            return {}
+
+    def fake_get(*args, **kwargs):
+        return Dummy404()
+
+    monkeypatch.setattr('src.exchange.binance_meta.requests.get', fake_get)
+    meta = BinanceMeta("k", "s", use_testnet=True)
+    with caplog.at_level("WARNING"):
+        fees = meta.get_account_trade_fees()
+    assert fees["SPOT"]["maker"] == 0.001
+    assert meta.last_fee_origin == "Fallback (testnet)"
+    assert "testnet no soporta tradeFee" in caplog.text
