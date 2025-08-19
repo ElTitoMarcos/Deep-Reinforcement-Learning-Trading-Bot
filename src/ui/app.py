@@ -75,7 +75,12 @@ with st.sidebar:
     fees_maker = st.session_state.get("fee_maker", fees_maker)
     fees_taker = st.session_state.get("fee_taker", fees_taker)
     cfg["fees"] = {"maker": fees_maker, "taker": fees_taker}
-    slippage = st.number_input("Slippage", value=float(cfg.get("slippage",0.0005)), step=0.0001, format="%.6f")
+    slippage_mult = st.number_input(
+        "Multiplicador slippage",
+        value=float(cfg.get("slippage_multiplier", 1.0)),
+        step=0.1,
+        format="%.2f",
+    )
     min_notional = st.number_input("Mínimo notional USD", value=float(cfg.get("min_notional_usd",10.0)), step=1.0)
 
     tick_size = st.number_input("tickSize", value=float(cfg.get("filters",{}).get("tickSize",0.01)))
@@ -119,7 +124,7 @@ with st.sidebar:
             "symbols": selected_symbols,
             "timeframe": cfg.get("timeframe", "1m"),
             "fees": {"taker": fees_taker, "maker": cfg.get("fees", {}).get("maker", fees_taker)},
-            "slippage": slippage,
+            "slippage_multiplier": slippage_mult,
             "min_notional_usd": min_notional,
             "filters": {"tickSize": tick_size, "stepSize": step_size},
             "algo": algo,

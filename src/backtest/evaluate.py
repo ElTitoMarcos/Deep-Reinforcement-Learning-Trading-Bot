@@ -41,10 +41,12 @@ def main():
         df,
         pol,
         fees=fee,
-        slippage=cfg.get("slippage", 0.0005),
+        slippage_multiplier=cfg.get("slippage_multiplier", 1.0),
         min_notional_usd=cfg.get("min_notional_usd", 10.0),
         tick_size=cfg.get("filters", {}).get("tickSize", 0.01),
         step_size=cfg.get("filters", {}).get("stepSize", 0.0001),
+        symbol=symbol,
+        slippage_depth=int(cfg.get("slippage_depth", 50)),
     )
     equity = sim["equity"]
     trades = sim["trades"]

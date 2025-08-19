@@ -161,10 +161,12 @@ def main() -> None:
         df,
         policy,
         fees=cfg.get("fees", {}).get("taker", 0.001),
-        slippage=cfg.get("slippage", 0.0005),
+        slippage_multiplier=cfg.get("slippage_multiplier", 1.0),
         min_notional_usd=cfg.get("min_notional_usd", 10.0),
         tick_size=cfg.get("filters", {}).get("tickSize", 0.01),
         step_size=cfg.get("filters", {}).get("stepSize", 0.0001),
+        symbol=(cfg.get("symbols") or ["BTC/USDT"])[0],
+        slippage_depth=int(cfg.get("slippage_depth", 50)),
     )
 
     reports_root = paths.get("reports_dir", "reports")

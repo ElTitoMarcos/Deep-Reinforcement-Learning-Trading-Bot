@@ -26,7 +26,7 @@ def make_df(prices):
     )
 
 
-def test_order_respects_filters():
+def test_order_respects_filters(monkeypatch):
     df = make_df([101.23, 110.55])
     cfg = {
         "fees": {"taker": 0.0},
@@ -34,6 +34,7 @@ def test_order_respects_filters():
         "filters": {"tickSize": 0.1, "stepSize": 0.5},
     }
     meta = DummyMeta()
+    monkeypatch.setattr("src.env.trading_env.estimate_slippage", lambda *a, **k: 0.0)
     env = TradingEnv(df, cfg=cfg, symbol="BTC/USDT", meta=meta)
     env.reset()
     env.step(1)
