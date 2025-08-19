@@ -1,6 +1,7 @@
 import os, io, sys, json, subprocess, time
 from datetime import datetime, UTC
 import streamlit as st
+from src.ui.log_stream import subscribe as log_subscribe
 
 from src.utils.config import load_config
 from src.utils import paths
@@ -32,9 +33,10 @@ st.set_page_config(page_title="DRL Trading Config", layout="wide")
 
 st.title("⚙️ Configuración DRL Trading")
 
-for k, v in {"fee_maker": None, "fee_taker": None}.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
+if "fee_taker" not in st.session_state:
+    st.session_state["fee_taker"] = None
+if "fee_maker" not in st.session_state:
+    st.session_state["fee_maker"] = None
 
 device = get_device()
 if device == "cuda":
@@ -87,22 +89,9 @@ with st.sidebar:
     cfg["symbols"] = selected_symbols
 
     fees_dict = cfg.get("fees", {})
-    current_fee_maker = st.session_state["fee_maker"] or float(fees_dict.get("maker", 0.001))
-    current_fee_taker = st.session_state["fee_taker"] or float(fees_dict.get("taker", 0.001))
-    st.number_input(
-        "Fee maker",
-        value=float(current_fee_maker),
-        step=0.0001,
-        format="%.6f",
-        key="fee_maker",
-    )
-    st.number_input(
-        "Fee taker",
-        value=float(current_fee_taker),
-        step=0.0001,
-        format="%.6f",
-        key="fee_taker",
-    )
+    default_fee_taker = float(fees_dict.get("taker", 0.001))
+    api_fee_taker = None
+    api_fee_maker = None
     btn_col, origin_col = st.columns([1, 1])
     with btn_col:
         if st.button("Actualizar comisiones"):
@@ -116,22 +105,39 @@ with st.sidebar:
                     selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map))
                 )
                 entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
-                st.session_state["fee_maker"] = entry.get("maker", current_fee_maker)
-                st.session_state["fee_taker"] = entry.get("taker", current_fee_taker)
+                api_fee_taker = entry.get("taker")
+                api_fee_maker = entry.get("maker")
                 st.session_state["fee_origin"] = meta.last_fee_origin
-                st.success(
-                    f"Maker {entry.get('maker',0)} | Taker {entry.get('taker',0)}"
-                )
-                st.experimental_rerun()
+                st.success(f"Maker {api_fee_maker} | Taker {api_fee_taker}")
             except Exception as e:
                 st.error(f"No se pudo obtener: {e}")
     with origin_col:
         origin = st.session_state.get("fee_origin")
         if origin:
             st.caption(origin)
+
+    fee_taker = api_fee_taker or st.session_state["fee_taker"] or default_fee_taker
+    fee_maker = api_fee_maker or st.session_state["fee_maker"] or fee_taker
+    st.session_state["fee_taker"] = fee_taker
+    st.session_state["fee_maker"] = fee_maker
+
+    st.number_input(
+        "Fee taker",
+        value=float(fee_taker),
+        step=0.0001,
+        format="%.6f",
+        key="fee_taker",
+    )
+    st.number_input(
+        "Fee maker",
+        value=float(fee_maker),
+        step=0.0001,
+        format="%.6f",
+        key="fee_maker",
+    )
     cfg["fees"] = {
-        "maker": st.session_state["fee_maker"] or current_fee_maker,
-        "taker": st.session_state["fee_taker"] or current_fee_taker,
+        "maker": st.session_state["fee_maker"] or fee_maker,
+        "taker": st.session_state["fee_taker"] or fee_taker,
     }
     slippage_mult = st.number_input(
         "Multiplicador slippage",
@@ -280,7 +286,7 @@ with st.sidebar:
             "binance_use_testnet": use_testnet,
             "symbols": selected_symbols,
             "timeframe": cfg.get("timeframe", "1m"),
-            "fees": {"taker": fees_taker, "maker": cfg.get("fees", {}).get("maker", fees_taker)},
+            "fees": {"taker": fee_taker, "maker": fee_maker},
             "slippage_multiplier": slippage_mult,
             "min_notional_usd": min_notional,
             "filters": {"tickSize": tick_size, "stepSize": step_size},
@@ -523,8 +529,10 @@ if st.button("📈 Evaluar"):
         if logs:
             st.expander("Logs").code(logs, language="bash")
 
-          reports_root = paths.reports_dir()
-        run_dirs = sorted(reports_root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True)
+        reports_root = paths.reports_dir()
+        run_dirs = sorted(
+            reports_root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
         if run_dirs:
             latest = run_dirs[0]
             try:
@@ -541,5 +549,38 @@ if st.button("📈 Evaluar"):
             st.error(res.stderr)
     except Exception as e:
         st.error(f"Fallo al evaluar: {e}")
+st.subheader("Actividad en vivo")
+kind_options = ["trades", "riesgo", "datos", "checkpoints", "llm"]
+selected_kinds = st.multiselect("Tipos", kind_options, default=kind_options, key="log_kind_sel")
 
-st.caption("Consejo: usa un terminal aparte si prefieres ver logs en tiempo real mientras el entrenamiento corre.")
+if "log_paused" not in st.session_state:
+    st.session_state["log_paused"] = False
+
+if st.button("Pausar" if not st.session_state["log_paused"] else "Reanudar", key="pause_feed"):
+    st.session_state["log_paused"] = not st.session_state["log_paused"]
+
+placeholder = st.empty()
+if "log_lines" not in st.session_state:
+    st.session_state["log_lines"] = []
+
+if "log_iter" not in st.session_state or st.session_state.get("log_iter_kinds") != set(selected_kinds):
+    st.session_state["log_iter_kinds"] = set(selected_kinds)
+    st.session_state["log_iter"] = log_subscribe(kinds=set(selected_kinds))
+
+if not st.session_state["log_paused"]:
+    start = time.time()
+    gen = st.session_state["log_iter"]
+    while time.time() - start < 0.5:
+        try:
+            item = next(gen)
+            st.session_state["log_lines"].append(item["message"])
+        except StopIteration:
+            break
+        except Exception:
+            break
+    st.session_state["log_lines"] = st.session_state["log_lines"][-200:]
+placeholder.text("\n".join(st.session_state.get("log_lines", [])))
+
+if not st.session_state["log_paused"]:
+    time.sleep(0.5)
+    st.experimental_rerun()
