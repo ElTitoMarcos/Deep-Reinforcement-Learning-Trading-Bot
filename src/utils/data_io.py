@@ -154,7 +154,6 @@ def fill_small_gaps(df: pd.DataFrame, max_ticks: int = 3) -> tuple[pd.DataFrame,
     df["ts"] = (df["ts"].astype("int64") // 1_000_000).astype("int64")
     return df[["ts", "open", "high", "low", "close", "volume"]], filled
 
-
 def validate_ohlcv(df: pd.DataFrame) -> pd.DataFrame:
     """Validate OHLCV data and ensure canonical ordering."""
 
