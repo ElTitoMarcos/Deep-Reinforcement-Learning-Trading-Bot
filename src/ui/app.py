@@ -266,17 +266,34 @@ with st.sidebar:
     )
     llm_reason = st.checkbox("Usar LLM para decisiones razonadas")
     llm_periodic = st.checkbox("Llamadas periódicas durante entrenamiento")
-    llm_every = (
-        st.number_input("cada N episodios", value=10, min_value=1, step=1)
-        if llm_periodic
-        else None
-    )
+    llm_mode = "Por episodios"
+    llm_every = 0
+    if llm_periodic:
+        llm_mode = st.radio("Modo", ["Por episodios", "Por minutos"], index=0)
+        if llm_mode == "Por episodios":
+            llm_every = st.number_input(
+                "Frecuencia de consultas al asistente (en episodios)",
+                value=0,
+                min_value=0,
+                step=1,
+                help="Ej.: 50 = pedirá consejo al asistente cada 50 episodios. 0 = desactivado.",
+            )
+        else:
+            llm_every = st.number_input(
+                "Frecuencia de consultas al asistente (en minutos)",
+                value=0,
+                min_value=0,
+                step=1,
+                help="Ej.: 5 = pedirá consejo al asistente cada 5 minutos. 0 = desactivado.",
+            )
+    periodic_enabled = bool(llm_periodic and llm_every > 0)
     cfg["llm"] = {
         "model": llm_model,
-        "enabled": bool(llm_reason or llm_periodic),
+        "enabled": bool(llm_reason or periodic_enabled),
         "use_reasoned": bool(llm_reason),
-        "periodic": bool(llm_periodic),
-        "every_n": int(llm_every) if llm_every else None,
+        "periodic": periodic_enabled,
+        "mode": "minutes" if llm_mode == "Por minutos" else "episodes",
+        "every_n": int(llm_every),
     }
 
     if st.button("💾 Guardar config YAML"):

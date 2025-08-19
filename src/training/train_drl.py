@@ -304,6 +304,8 @@ def train_value_dqn(
     llm_client = None
     llm_file = None
     llm_every = int(llm_cfg.get("every_n") or 0)
+    llm_mode = llm_cfg.get("mode", "episodes")
+    last_llm_time = time.time()
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
@@ -377,9 +379,27 @@ def train_value_dqn(
                 obs = next_obs
                 total_steps += 1
                 ep_reward += reward
+                now = time.time()
+                if (
+                    llm_client
+                    and llm_mode == "minutes"
+                    and llm_every > 0
+                    and now - last_llm_time >= llm_every * 60
+                ):
+                    mean_reward = (total_reward + ep_reward) / max(1, episode)
+                    _maybe_call_llm(
+                        cfg,
+                        "dqn",
+                        episode,
+                        mean_reward,
+                        env,
+                        llm_client,
+                        llm_file,
+                        logger,
+                    )
+                    last_llm_time = now
 
                 if continuous:
-                    now = time.time()
                     if checkpoint_interval_min and now - last_ckpt >= checkpoint_interval_min * 60:
                         _save_checkpoint(ckpt_path, agent, total_steps, episode, total_reward + ep_reward, start_time)
                         last_ckpt = now
@@ -399,7 +419,12 @@ def train_value_dqn(
                         return final_path
 
             total_reward += ep_reward
-            if llm_client and episode % llm_every == 0:
+            if (
+                llm_client
+                and llm_mode == "episodes"
+                and llm_every > 0
+                and episode % llm_every == 0
+            ):
                 mean_reward = total_reward / episode
                 _maybe_call_llm(
                     cfg,
@@ -467,6 +492,8 @@ def train_dqn(
     llm_client = None
     llm_file = None
     llm_every = int(llm_cfg.get("every_n") or 0)
+    llm_mode = llm_cfg.get("mode", "episodes")
+    last_llm_time = time.time()
     if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
@@ -534,9 +561,33 @@ def train_dqn(
             obs = next_obs
             total_steps += 1
             ep_reward += reward
+            now = time.time()
+            if (
+                llm_client
+                and llm_mode == "minutes"
+                and llm_every > 0
+                and now - last_llm_time >= llm_every * 60
+            ):
+                mean_reward = (total_reward + ep_reward) / max(1, episode)
+                _maybe_call_llm(
+                    cfg,
+                    "dqn",
+                    episode,
+                    mean_reward,
+                    env,
+                    llm_client,
+                    llm_file,
+                    logger,
+                )
+                last_llm_time = now
 
         total_reward += ep_reward
-        if llm_client and episode % llm_every == 0:
+        if (
+            llm_client
+            and llm_mode == "episodes"
+            and llm_every > 0
+            and episode % llm_every == 0
+        ):
             mean_reward = total_reward / episode
             _maybe_call_llm(
                 cfg,
