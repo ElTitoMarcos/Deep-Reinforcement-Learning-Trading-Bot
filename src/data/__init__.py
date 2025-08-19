@@ -5,6 +5,7 @@ __all__ = [
     "get_exchange",
     "fetch_ohlcv",
     "save_history",
+    "discover_symbols",
 ]
 
 from .ccxt_loader import (  # noqa: E402
@@ -13,4 +14,5 @@ from .ccxt_loader import (  # noqa: E402
     fetch_ohlcv,
     save_history,
 )
+from .symbol_discovery import discover_symbols
 
