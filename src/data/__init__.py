@@ -6,6 +6,7 @@ __all__ = [
     "fetch_ohlcv",
     "save_history",
     "discover_symbols",
+    "find_high_activity_windows",
 ]
 
 from .ccxt_loader import (  # noqa: E402
@@ -15,4 +16,5 @@ from .ccxt_loader import (  # noqa: E402
     save_history,
 )
 from .symbol_discovery import discover_symbols
+from .volatility_windows import find_high_activity_windows
 
