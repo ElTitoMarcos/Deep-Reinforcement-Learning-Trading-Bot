@@ -49,6 +49,10 @@ logs/
 reports/
 *.parquet
 *.csv
+# allow tracked universe file
+!src/data/
+!src/data/universe/
+!src/data/universe/liquid_universe.csv
 
 # OS files
 .DS_Store
