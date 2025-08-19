@@ -21,6 +21,7 @@ import os
 import json
 from dataclasses import dataclass
 from typing import Tuple
+from datetime import datetime
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,7 @@ import pandas as pd
 from ..env.trading_env import TradingEnv
 from ..utils.config import load_config
 from ..utils.data_io import load_table
-from ..utils.logging import ensure_logger
+from ..utils.logging import ensure_logger, config_hash
 from ..policies.value_based import ValueBasedPolicy
 
 
@@ -141,6 +142,30 @@ def quick_eval(env: TradingEnv, agent: TinyDQN) -> float:
         obs, _, done, _, _ = eval_env.step(action)
     return float(eval_env.equity)
 
+# ---------------------------------------------------------------------------
+# Model IO helpers ----------------------------------------------------------
+
+def save_model(agent: ValueBasedPolicy, algo: str, symbol: str) -> str:
+    """Persist a trained policy to the models directory with metadata."""
+    ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+    fname = f"{ts}_{algo}_{symbol}.pt"
+    models_dir = "models"
+    os.makedirs(models_dir, exist_ok=True)
+    path = os.path.join(models_dir, fname)
+    agent.save_model(path)
+    return path
+
+
+def load_model(path: str, cfg: dict) -> ValueBasedPolicy:
+    """Load a :class:`ValueBasedPolicy` and validate config hash."""
+    meta_path = os.path.splitext(path)[0] + ".json"
+    with open(meta_path, "r", encoding="utf-8") as fh:
+        meta = json.load(fh)
+    if meta.get("config_hash") != config_hash(cfg):
+        raise ValueError("config hash mismatch")
+    policy = ValueBasedPolicy(obs_dim=meta["obs_dim"], n_actions=meta["n_actions"], config=cfg)
+    policy.load_model(path)
+    return policy
 
 def train_value_dqn(
     env: TradingEnv,
@@ -174,10 +199,11 @@ def train_value_dqn(
 
         if checkpoint_freq and episode % checkpoint_freq == 0:
             ckpt = os.path.join(outdir, f"vdqn_ep{episode}.pt")
-            agent.save(ckpt)
+            agent.save_model(ckpt)
 
-    final_path = os.path.join(outdir, "vdqn_final.pt")
-    agent.save(final_path)
+    symbol = (cfg.get("symbols") or ["UNK"])[0].replace("/", "-")
+    final_path = save_model(agent, "dqn", symbol)
+
     return final_path
 
 
