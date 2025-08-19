@@ -28,6 +28,7 @@ dqn:
   learning_rate: 1.0e-3
   gamma: 0.99
   batch_size: 64
+  buffer_size: 10000
   target_update: 1000
   epsilon_start: 1.0
   epsilon_end: 0.05
@@ -63,3 +64,4 @@ paths:
   logs_dir: "logs"
   reports_dir: "reports"
   checkpoints_dir: "checkpoints"
+  models_dir: "models"
