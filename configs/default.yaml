@@ -47,6 +47,15 @@ deterministic_policy:
   trailing_pct: 0.01      # exit when price falls this fraction from peak
   cooldown_ticks: 5       # min ticks between consecutive trades
 
+# Stochastic policy params
+stochastic_policy:
+  base_threshold: 0.001   # same semantics as deterministic
+  bounce_coef: 0.5
+  trailing_pct: 0.01
+  temperature: 0.1        # softmax temperature tau
+  noise_std: 0.0001       # std-dev of Gaussian noise on thresholds
+  seed: 42
+
 # Paths
 paths:
   data_root: "data"
