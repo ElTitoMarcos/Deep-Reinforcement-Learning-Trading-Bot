@@ -21,7 +21,6 @@ class _Space:
     shape: Tuple[int, ...]
     dtype: Any = np.float32
 
-
 @dataclass
 class _Discrete:
     """Minimal discrete space (``n`` possible integer actions)."""
