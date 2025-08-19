@@ -351,6 +351,7 @@ def main() -> None:
             raise RuntimeError("stable-baselines3 is required for PPO training")
         out = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
     elif algo_key == "hybrid":
+
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
         ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=ckpt_dir)
