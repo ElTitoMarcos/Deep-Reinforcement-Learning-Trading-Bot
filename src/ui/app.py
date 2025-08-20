@@ -7,7 +7,7 @@ from src.auto import reward_human_names, AlgoController
 
 from src.utils.config import load_config
 from src.utils import paths
-from src.reports.human_friendly import render_panel
+from src.reports.human_friendly import render_panel, to_human
 from src.utils.device import get_device, set_cpu_threads
 from src.data.ccxt_loader import get_exchange
 from src.data.symbol_discovery import discover_symbols, discover_summary
@@ -549,32 +549,58 @@ if st.button("📈 Evaluar"):
             st.warning("Proceso cancelado")
     finally:
         st.session_state["busy"] = False
-st.subheader("Actividad en vivo")
-stage_scheduler = st.session_state.get("stage_scheduler")
-stage_name = getattr(stage_scheduler, "stage", "data")
-profile = get_auto_profile(stage_name)
 
-placeholder = st.empty()
-if "log_lines" not in st.session_state:
-    st.session_state["log_lines"] = []
+# ---- Registro por áreas ---------------------------------------------------
 
-if "log_iter" not in st.session_state or st.session_state.get("log_profile") != profile:
-    st.session_state["log_profile"] = profile
-    st.session_state["log_iter"] = log_subscribe(kinds=profile)
+st.subheader("Registro")
 
-if not st.session_state.get("busy"):
-    start = time.time()
-    gen = st.session_state["log_iter"]
-    while time.time() - start < 0.5:
-        try:
-            item = next(gen)
-            st.session_state["log_lines"].append(item["message"])
-        except StopIteration:
-            break
-        except Exception:
-            break
-    st.session_state["log_lines"] = st.session_state["log_lines"][-200:]
-placeholder.text("\n".join(st.session_state.get("log_lines", [])))
+AREA_KINDS = {
+    "Datos": {"datos", "incremental_update", "qc"},
+    "Entrenamiento": {"reward_tuner", "dqn_stability", "checkpoints"},
+    "Evaluación": {"hybrid_weights", "performance"},
+    "LLM": {"llm"},
+    "Riesgo": {"riesgo"},
+}
+
+tabs = st.tabs(list(AREA_KINDS.keys()))
+
+if "log_iters" not in st.session_state:
+    st.session_state["log_iters"] = {}
+if "log_buffers" not in st.session_state:
+    st.session_state["log_buffers"] = {}
+
+for tab, (area, kinds) in zip(tabs, AREA_KINDS.items()):
+    if area not in st.session_state["log_iters"]:
+        st.session_state["log_iters"][area] = log_subscribe(kinds=kinds)
+        st.session_state["log_buffers"][area] = []
+    with tab:
+        placeholder = st.empty()
+        if not st.session_state.get("busy"):
+            start = time.time()
+            gen = st.session_state["log_iters"][area]
+            buf = st.session_state["log_buffers"][area]
+            while time.time() - start < 0.5:
+                try:
+                    item = next(gen)
+                    buf.append(item)
+                except StopIteration:
+                    break
+                except Exception:
+                    break
+            st.session_state["log_buffers"][area] = buf[-200:]
+        lines = [to_human(it) for it in st.session_state["log_buffers"][area]]
+        placeholder.text("\n".join(lines))
+        if st.button("Exportar", key=f"export_{area}"):
+            run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            run_dir = paths.reports_dir() / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            path = run_dir / "log_humano.md"
+            md_lines = [
+                f"- {it['time'].isoformat()} - {to_human(it)}"
+                for it in st.session_state["log_buffers"][area][-200:]
+            ]
+            path.write_text("\n".join(md_lines), encoding="utf-8")
+            st.success(f"Guardado en {path}")
 
 if not st.session_state.get("busy"):
     time.sleep(0.5)

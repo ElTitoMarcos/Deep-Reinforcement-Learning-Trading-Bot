@@ -13,6 +13,21 @@ from typing import Mapping, Sequence, Any
 import numpy as np
 
 
+# Basic translations for log kinds to more readable Spanish phrases
+_KIND_TRANSLATIONS = {
+    "datos": "Evento de datos",
+    "incremental_update": "Actualización incremental completada",
+    "qc": "Validación de datos completada",
+    "reward_tuner": "Ajuste de recompensas",
+    "dqn_stability": "Revisión de estabilidad del DQN",
+    "checkpoints": "Checkpoint guardado",
+    "hybrid_weights": "Pesos híbridos actualizados",
+    "performance": "Evaluación de performance",
+    "llm": "Mensaje del LLM",
+    "riesgo": "Aviso de riesgo",
+}
+
+
 def _pnl_light(pnl: float) -> str:
     """Return a traffic light emoji for profit."""
     if pnl > 0.05:
@@ -136,4 +151,23 @@ def episode_sentence(metrics: Mapping[str, Any]) -> str:
         act_lbl = "baja"
 
     return f"Acumulas {pnl_str} en {window}; consistencia {cons_lbl}; actividad {act_lbl}."
+
+
+def to_human(msg: Mapping[str, Any]) -> str:
+    """Translate a log message mapping into a short human friendly sentence."""
+
+    # If a pre-rendered message is present, prefer it
+    text = msg.get("message")
+    if isinstance(text, str) and text:
+        return text
+
+    kind = str(msg.get("kind", ""))
+    if kind in _KIND_TRANSLATIONS:
+        return _KIND_TRANSLATIONS[kind]
+
+    event = str(msg.get("event", ""))
+    if event in _KIND_TRANSLATIONS:
+        return _KIND_TRANSLATIONS[event]
+
+    return str(text or kind or event or "")
 
