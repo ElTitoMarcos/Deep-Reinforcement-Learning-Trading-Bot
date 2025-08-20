@@ -5,6 +5,8 @@ import pandas as pd
 from .simulator import simulate
 from ..policies.router import get_policy
 from ..policies.hybrid import HybridPolicy
+from ..policy import HybridRuntime
+from ..auto import AlgoController
 from ..utils.data_io import load_table
 from ..utils.config import load_config
 from ..utils import paths
@@ -21,6 +23,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", type=str, default="configs/default.yaml")
     ap.add_argument("--policy", type=str, default="deterministic")
+    ap.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Usa HybridRuntime para combinar DQN y PPO",
+    )
     ap.add_argument("--data", type=str, default=None, help="Ruta a parquet/csv si quieres pasar datos manualmente")
     args = ap.parse_args()
 
@@ -59,6 +66,7 @@ def main():
 
     def _pk(name: str):
         return {"config": {"device": device}} if name in {"value_based", "dqn", "value", "value-based"} else {}
+    use_hybrid = False
 
     if args.policy.lower() == "hybrid":
         names = ["deterministic", "stochastic", "value_based"]
@@ -114,6 +122,24 @@ def main():
         )
     else:
         pol = get_policy(args.policy, **_pk(args.policy))
+        use_hybrid = args.hybrid or cfg.get("algo") == "hybrid" or cfg.get("runtime") == "hybrid"
+
+        if use_hybrid:
+            class _NoRiskControl:
+                def __init__(self, base):
+                    self.base = base
+
+                def act(self, obs):
+                    return self.base.act(obs)
+
+                def filter(self, signal, obs):
+                    return signal
+
+            dqn_pol = get_policy("value_based", **_pk("value_based"))
+            ppo_pol = _NoRiskControl(pol)
+            controller = AlgoController()
+            pol = HybridRuntime(dqn_pol, ppo_pol, controller)
+
         sim = simulate(
             df,
             pol,
@@ -131,21 +157,33 @@ def main():
     rets = sim["returns"]
     equity_curve = (1.0 + rets).cumprod()
 
+    signal_stats = {"hit_ratio": hit_ratio(trades), "trades": len(trades)}
+    control_stats = {
+        "max_drawdown": max_drawdown(equity_curve),
+        "turnover": turnover(trades),
+    }
+
     metrics = {
         "pnl": pnl(rets),
         "sharpe": sharpe(rets),
         "sortino": sortino(rets),
-        "max_drawdown": max_drawdown(equity_curve),
-        "hit_ratio": hit_ratio(trades),
-        "turnover": turnover(trades),
+        "max_drawdown": control_stats["max_drawdown"],
+        "hit_ratio": signal_stats["hit_ratio"],
+        "turnover": control_stats["turnover"],
         "equity_final": equity,
     }
+    if use_hybrid:
+        metrics["signal"] = signal_stats
+        metrics["control"] = control_stats
 
     print(
         f"Equity final: {equity:.4f}\n"
         f"PnL: {metrics['pnl']:.2%} | Sharpe: {metrics['sharpe']:.3f} | Sortino: {metrics['sortino']:.3f}\n"
-        f"MaxDD: {metrics['max_drawdown']:.3%} | HitRatio: {metrics['hit_ratio']:.2%} | Turnover: {metrics['turnover']}"
+        f"MaxDD: {control_stats['max_drawdown']:.3%} | HitRatio: {signal_stats['hit_ratio']:.2%} | Turnover: {control_stats['turnover']}"
     )
+    if use_hybrid:
+        hits = int(signal_stats["hit_ratio"] * signal_stats["trades"])
+        print(f"DQN acierta {hits}/{signal_stats['trades']} entradas; PPO reduce DD a {control_stats['max_drawdown']:.2%}")
 
     reports_root = paths.reports_dir()
     run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")

@@ -657,7 +657,19 @@ if st.button("📈 Evaluar"):
     except Exception as e:
         st.error(f"Fallo al evaluar: {e}")
 st.subheader("Actividad en vivo")
-kind_options = ["trades", "riesgo", "datos", "checkpoints", "llm", "metricas", "reward_tuner"]
+kind_options = [
+    "trades",
+    "riesgo",
+    "datos",
+    "checkpoints",
+    "llm",
+    "metricas",
+    "reward_tuner",
+    "algo_controller",
+    "stage_scheduler",
+    "dqn_stability",
+    "ppo_control",
+]
 selected_kinds = st.multiselect("Tipos", kind_options, default=kind_options, key="log_kind_sel")
 
 if "log_paused" not in st.session_state:

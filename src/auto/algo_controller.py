@@ -57,9 +57,15 @@ class AlgoController:
 
         if mapping != self.last_mapping:
             reason = self.explain(mapping)
-            logging.getLogger().info(
-                f"Nuevo mapeo: {mapping}", extra={"kind": "algo_controller", "reason": reason}
+            msg = (
+                "mapping: entries_exits={entry}, risk_limits={risk}, sizing={size} (motivo: {reason})"
+            ).format(
+                entry=mapping.get("entries_exits"),
+                risk=mapping.get("risk_limits"),
+                size=mapping.get("position_sizing"),
+                reason=reason,
             )
+            logging.getLogger().info(msg, extra={"kind": "algo_controller"})
             self.last_mapping = mapping
         return mapping
 

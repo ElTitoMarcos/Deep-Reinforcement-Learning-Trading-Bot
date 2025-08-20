@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Dict
 
+import logging
 from src.auto import AlgoController
 
 
@@ -35,6 +36,15 @@ class HybridRuntime:
         action = signal
         if mapping.get("risk_limits") == "ppo" or mapping.get("position_sizing") == "ppo":
             action = self.ppo_control.filter(signal, obs)
+            if action != signal:
+                logging.getLogger().info(
+                    "control ajusta qty %s→%s price %s→%s",
+                    signal.get("qty"),
+                    action.get("qty"),
+                    signal.get("price"),
+                    action.get("price"),
+                    extra={"kind": "ppo_control"},
+                )
         return action
 
 

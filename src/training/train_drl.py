@@ -30,6 +30,7 @@ import socket
 
 import numpy as np
 import pandas as pd
+import logging
 
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
@@ -504,6 +505,9 @@ def train_value_dqn(
                         "trade_ratio": block_trades / max(1, block_steps),
                     }
                     stage_info = scheduler.on_tick(sched_metrics)
+                    logging.getLogger().info(
+                        f"TD-error medio {td_err_avg:.3f}", extra={"kind": "dqn_stability"}
+                    )
                     if stage_info.get("changed"):
                         logger.log(
                             "INFO",
@@ -905,6 +909,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Train tiny DRL agents")
     parser.add_argument("--config", default="configs/default.yaml")
     parser.add_argument("--algo", default="dqn", help="dqn|tiny|ppo|hybrid")
+    parser.add_argument(
+        "--hybrid",
+        action="store_true",
+        help="Entrena simultáneamente módulos DQN (señal) y PPO (control)",
+    )
     parser.add_argument("--algo-reason", default="", help="Descripción breve de la elección automática")
     parser.add_argument("--timesteps", type=int, default=10_000)
     parser.add_argument("--data", type=str, default=None, help="Optional path to CSV/Parquet data")
@@ -976,7 +985,7 @@ def main() -> None:
     if args.algo_reason:
         logger.log("INFO", "auto_algo", algo=args.algo, reason=args.algo_reason)
 
-    algo_key = args.algo.lower()
+    algo_key = "hybrid" if args.hybrid else args.algo.lower()
     if args.continuous and algo_key != "dqn":
         raise ValueError("--continuous is only supported for dqn")
     data_stats = {
@@ -1042,11 +1051,26 @@ def main() -> None:
             max_hours=args.max_hours,
             logger=logger,
         )
-        out = json.dumps({"ppo": ppo_path, "dqn": dqn_path})
+        combo = {
+            "dqn_signal": {
+                "checkpoint": dqn_path,
+                "seed": cfg.get("seed"),
+                "version": cfg.get("dqn", {}).get("version", 1),
+            },
+            "ppo_control": {
+                "checkpoint": ppo_path,
+                "seed": cfg.get("seed"),
+                "version": cfg.get("ppo", {}).get("version", 1),
+            },
+        }
+        combo_path = ckpt_dir / "combo.json"
+        with open(combo_path, "w", encoding="utf-8") as fh:
+            json.dump(combo, fh, indent=2)
+        out = paths.posix(combo_path)
     else:  # pragma: no cover
         raise ValueError(f"Unknown algorithm: {args.algo}")
 
-    logger.log("INFO", "training_done", algo=args.algo, artifact=out)
+    logger.log("INFO", "training_done", algo=algo_key, artifact=out)
     print(f"Saved model/checkpoint to: {out}")
 
 

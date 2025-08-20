@@ -167,6 +167,12 @@ class RewardTuner:
         if not success:
             self.weights = prev_w
 
+        arrow = "↑" if direction == "up" else "↓"
+        delta_w = self.weights[key] - prev_w[key]
+        delta_score = score_after - score_before
+        msg = f"{key} {arrow} {delta_w:+.2f} (Δscore {delta_score:+.2f})"
+        logging.getLogger().info(msg, extra={"kind": "reward_tuner"})
+
         self.last_action = None
 
 
