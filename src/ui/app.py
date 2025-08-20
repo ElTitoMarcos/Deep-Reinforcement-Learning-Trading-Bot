@@ -18,10 +18,41 @@ from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
 from src.auto.strategy_selector import choose_algo
 from src.auto.hparam_tuner import tune
+from src.ui.credentials import (
+    verify_binance_mainnet,
+    verify_binance_testnet,
+    verify_openai,
+)
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
 st.set_page_config(page_title="DRL Trading Config", layout="wide")
+
+load_dotenv(".env.local")
+load_dotenv()
+
+if "binance_mainnet_ok" not in st.session_state:
+    api_key = os.getenv("BINANCE_API_KEY")
+    api_secret = os.getenv("BINANCE_API_SECRET")
+    ok = False
+    if api_key and api_secret:
+        ok, _ = verify_binance_mainnet(api_key, api_secret)
+    st.session_state["binance_mainnet_ok"] = ok
+
+if "binance_testnet_ok" not in st.session_state:
+    t_key = os.getenv("BINANCE_TESTNET_API_KEY")
+    t_secret = os.getenv("BINANCE_TESTNET_API_SECRET")
+    ok = False
+    if t_key and t_secret:
+        ok, _ = verify_binance_testnet(t_key, t_secret)
+    st.session_state["binance_testnet_ok"] = ok
+
+if "openai_ok" not in st.session_state:
+    o_key = os.getenv("OPENAI_API_KEY")
+    ok = False
+    if o_key:
+        ok, _ = verify_openai(o_key)
+    st.session_state["openai_ok"] = ok
 
 st.title("⚙️ Configuración DRL Trading")
 
@@ -43,6 +74,24 @@ else:
     st.sidebar.info(f"Dispositivo: CPU ({threads} hilos)")
 
 with st.sidebar:
+    st.header("Conexiones")
+    def badge(ok: bool) -> str:
+        return f":{'green' if ok else 'red'}[{'Conectado' if ok else 'No conectado'}]"
+
+    st.markdown(f"Binance mainnet {badge(st.session_state.get('binance_mainnet_ok', False))}")
+    st.markdown(f"Binance testnet {badge(st.session_state.get('binance_testnet_ok', False))}")
+    st.markdown(f"OpenAI {badge(st.session_state.get('openai_ok', False))}")
+    if not (
+        st.session_state.get("binance_mainnet_ok")
+        and st.session_state.get("binance_testnet_ok")
+        and st.session_state.get("openai_ok")
+    ):
+        st.warning("Faltan claves o verificación falló")
+        try:
+            st.page_link("src/ui/credentials.py", label="Configurar conexiones")
+        except Exception:
+            st.markdown("[Configurar conexiones](./credentials)")
+
     st.header("Ajustes globales")
     CONFIG_PATH = st.text_input("Ruta config YAML", value=CONFIG_PATH, key="cfg_path", help="Normalmente configs/default.yaml")
     st.session_state["config_path"] = CONFIG_PATH
