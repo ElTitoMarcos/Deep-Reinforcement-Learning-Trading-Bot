@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import List
+from datetime import datetime, UTC
 
 STABLES = {
     "USDT",
@@ -55,3 +56,29 @@ def discover_symbols(exchange, quote: str = "USDT", top_n: int = 20) -> List[str
 
     ranked.sort(reverse=True)
     return [sym for _, sym in ranked[:top_n]]
+
+
+def discover_summary(symbols: List[str]) -> str:
+    """Return a human readable summary for *symbols*.
+
+    Example::
+
+        "Top 15 por volumen USDT, excluidos stablecoins, actualizado 10:32 UTC"
+
+    Parameters
+    ----------
+    symbols:
+        List of symbol strings like ``"BTC/USDT"``.
+
+    Returns
+    -------
+    str
+        Summary describing the discovery outcome.
+    """
+
+    quote = symbols[0].split("/")[1] if symbols else "USDT"
+    now = datetime.now(UTC).strftime("%H:%M")
+    return (
+        f"Top {len(symbols)} por volumen {quote}, excluidos stablecoins, "
+        f"actualizado {now} UTC"
+    )

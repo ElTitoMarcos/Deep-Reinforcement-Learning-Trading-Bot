@@ -32,6 +32,12 @@ _EVENT_MAP = {
     ),
 }
 
+_PROFILES: Dict[str, Set[str]] = {
+    "training": {"reward_tuner", "dqn_stability", "checkpoints"},
+    "evaluation": {"hybrid_weights", "performance"},
+    "data": {"incremental_update", "qc"},
+}
+
 class _StreamHandler(logging.Handler):
     def emit(self, record: logging.LogRecord) -> None:  # pragma: no cover - passthrough
         event = getattr(record, "event", None)
@@ -74,3 +80,15 @@ def subscribe(level: str = "info", kinds: Optional[Set[str]] = None) -> Iterator
             if item["levelno"] >= levelno and (not kinds or item["kind"] in kinds):
                 yield item
         time.sleep(0.1)
+
+
+def get_auto_profile(stage: str) -> Set[str]:
+    """Return default event kinds for a given app stage."""
+    stage = (stage or "").lower()
+    if stage in {"warmup", "exploration", "consolidation", "fine-tune", "training"}:
+        key = "training"
+    elif stage.startswith("eval"):
+        key = "evaluation"
+    else:
+        key = "data"
+    return _PROFILES[key]
