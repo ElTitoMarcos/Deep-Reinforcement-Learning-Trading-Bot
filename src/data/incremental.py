@@ -3,13 +3,14 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 import pandas as pd
 
 from ..utils import paths
 from ..utils.data_io import read_parquet_safe, write_parquet_atomic
-from .ccxt_loader import fetch_ohlcv
+from .ccxt_loader import fetch_ohlcv, get_exchange
+from datetime import datetime, UTC, timedelta
 
 _EXCHANGE = "binance"
 
@@ -80,3 +81,44 @@ def upsert_parquet(df: pd.DataFrame, path: Path) -> None:
         df = df.rename(columns={ts_col: "ts"})
 
     write_parquet_atomic(df, path)
+
+
+def update_all(
+    symbols: Iterable[str],
+    timeframe: str = "1m",
+    lookback_days: int = 30,
+) -> None:
+    """Fetch incremental OHLCV updates for *symbols* and persist them.
+
+    Parameters
+    ----------
+    symbols:
+        Iterable of market symbols like ``"BTC/USDT"``.
+    timeframe:
+        Candle timeframe string, defaults to ``"1m"``.
+    lookback_days:
+        Number of days to look back when no previous data is available.
+    """
+
+    ex = get_exchange()
+    for sym in symbols:
+        since = last_watermark(sym, timeframe)
+        if since is None:
+            since = int(
+                (datetime.now(UTC) - timedelta(days=lookback_days)).timestamp() * 1000
+            )
+        df_new = fetch_ohlcv_incremental(ex, sym, timeframe, since_ms=since)
+        if df_new.empty:
+            continue
+        path = paths.raw_parquet_path(
+            ex.id if hasattr(ex, "id") else _EXCHANGE, sym, timeframe
+        )
+        upsert_parquet(df_new, path)
+        manifest = {
+            "symbol": sym,
+            "timeframe": timeframe,
+            "watermark": int(df_new["ts"].max()),
+            "obtained_at": datetime.now(UTC).isoformat(),
+        }
+        with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
+            json.dump(manifest, f, indent=2)
