@@ -57,7 +57,10 @@ with st.sidebar:
     # Cargar YAML
     try:
         cfg = load_config(CONFIG_PATH)
+        defaults_used = cfg.pop("_defaults_used", [])
         paths.ensure_dirs_exist()
+        if defaults_used:
+            st.warning("Config incompleta; se aplicaron defaults para: " + ", ".join(defaults_used))
     except Exception as e:
         st.error(f"No se pudo cargar {CONFIG_PATH}: {e}")
         cfg = {}
