@@ -40,10 +40,34 @@ class BinanceMeta:
         params["signature"] = signature
         headers = {"X-MBX-APIKEY": self.api_key}
 
+        bps_env = os.getenv("BINANCE_DEFAULT_FEE_BPS")
+        if bps_env:
+            try:
+                default_bps = float(bps_env)
+            except ValueError:
+                default_bps = 10.0
+            default_fee = default_bps / 10000.0
+        else:
+            try:
+                with open("configs/default.yaml", "r", encoding="utf-8") as fh:
+                    cfg = yaml.safe_load(fh)
+                default_fee = float(cfg.get("fees", {}).get("taker", 0.001))
+                default_bps = default_fee * 10000.0
+            except Exception:
+                default_bps = 10.0
+                default_fee = 0.001
+
         try:
             resp = requests.get(base + endpoint, params=params, headers=headers, timeout=10)
             if self.use_testnet and getattr(resp, "status_code", None) == 404:
-                raise requests.HTTPError("testnet tradeFee unsupported", response=resp)
+                fees = {"SPOT": {"taker": default_fee, "maker": default_fee}}
+                self.last_fee_origin = "Fuente: Fallback testnet"
+                logger.info(
+                    "[binance_meta] Testnet sin endpoint tradeFee → usando fallback %s bps (%.4f)",
+                    default_bps,
+                    default_fee,
+                )
+                return fees
             resp.raise_for_status()
             data = resp.json()
             fees: Dict[str, Dict[str, float]] = {}
@@ -54,32 +78,26 @@ class BinanceMeta:
                     "taker": float(item.get("takerCommission", 0.0)),
                 }
             if fees:
-                self.last_fee_origin = "Detectado por API"
+                self.last_fee_origin = "Fuente: API mainnet" if not self.use_testnet else "Fuente: API testnet"
                 return fees
         except Exception as exc:  # pragma: no cover - network or auth issues
-            bps_env = os.getenv("BINANCE_DEFAULT_FEE_BPS")
-            if bps_env:
-                try:
-                    bps = float(bps_env)
-                except ValueError:
-                    bps = 10.0
-                fee = bps / 10000.0
-            else:
-                try:
-                    with open("configs/default.yaml", "r", encoding="utf-8") as fh:
-                        cfg = yaml.safe_load(fh)
-                    fee = float(cfg.get("fees", {}).get("taker", 0.001))
-                    bps = fee * 10000.0
-                except Exception:
-                    fee = 0.001
-                    bps = 10.0
             if self.use_testnet:
-                self.last_fee_origin = "Fallback (testnet)"
-                logger.warning("testnet no soporta tradeFee; usando fallback %s bps", bps)
+                self.last_fee_origin = "Fuente: Fallback testnet"
+                logger.info(
+                    "[binance_meta] testnet tradeFee fallo (%s); usando fallback %s bps (%.4f)",
+                    exc,
+                    default_bps,
+                    default_fee,
+                )
             else:
-                self.last_fee_origin = "Fallback"
-                logger.warning("tradeFee API failed: %s; usando fallback %s bps", exc, bps)
-            return {"SPOT": {"maker": fee, "taker": fee}}
+                self.last_fee_origin = "Fuente: Fallback"
+                logger.warning(
+                    "[binance_meta] tradeFee API fallo: %s; usando fallback %s bps (%.4f)",
+                    exc,
+                    default_bps,
+                    default_fee,
+                )
+            return {"SPOT": {"maker": default_fee, "taker": default_fee}}
 
     def get_symbol_filters(self, symbol: str) -> Dict[str, float]:
         """Return price/lot/minNotional filters for *symbol*.

@@ -77,29 +77,35 @@ with st.sidebar:
     default_fee_taker = float(fees_dict.get("taker", 0.001))
     api_fee_taker = None
     api_fee_maker = None
-    btn_col, origin_col = st.columns([1, 1])
-    with btn_col:
-        if st.button("Actualizar comisiones"):
-            load_dotenv()
-            api_key = os.getenv("BINANCE_API_KEY")
-            api_secret = os.getenv("BINANCE_API_SECRET")
-            try:
-                meta = BinanceMeta(api_key, api_secret, use_testnet)
-                fee_map = meta.get_account_trade_fees()
+
+    header_col, badge_col = st.columns([3, 2])
+    with header_col:
+        st.subheader("Comisiones")
+    with badge_col:
+        origin = st.session_state.get("fee_origin")
+        if origin:
+            st.caption(origin)
+
+    if st.button("Actualizar comisiones"):
+        load_dotenv()
+        api_key = os.getenv("BINANCE_API_KEY")
+        api_secret = os.getenv("BINANCE_API_SECRET")
+        try:
+            meta = BinanceMeta(api_key, api_secret, use_testnet)
+            fee_map = meta.get_account_trade_fees()
+            if "maker" in fee_map and "taker" in fee_map:
+                entry = fee_map
+            else:
                 symbol_key = (
                     selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map))
                 )
                 entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
-                api_fee_taker = entry.get("taker")
-                api_fee_maker = entry.get("maker")
-                st.session_state["fee_origin"] = meta.last_fee_origin
-                st.success(f"Maker {api_fee_maker} | Taker {api_fee_taker}")
-            except Exception as e:
-                st.error(f"No se pudo obtener: {e}")
-    with origin_col:
-        origin = st.session_state.get("fee_origin")
-        if origin:
-            st.caption(origin)
+            api_fee_taker = entry.get("taker")
+            api_fee_maker = entry.get("maker")
+            st.session_state["fee_origin"] = meta.last_fee_origin
+            st.success(f"Maker {api_fee_maker} | Taker {api_fee_taker}")
+        except Exception as e:
+            st.error(f"No se pudo obtener: {e}")
 
     fee_taker = api_fee_taker or st.session_state["fee_taker"] or default_fee_taker
     fee_maker = api_fee_maker or st.session_state["fee_maker"] or fee_taker

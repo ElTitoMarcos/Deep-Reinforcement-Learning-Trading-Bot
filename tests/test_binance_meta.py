@@ -58,7 +58,7 @@ def test_binance_meta_fallback(monkeypatch):
     fees = meta.get_account_trade_fees()
     assert fees["SPOT"]["maker"] == 0.001
     assert fees["SPOT"]["taker"] == 0.001
-    assert meta.last_fee_origin == "Fallback"
+    assert meta.last_fee_origin == "Fuente: Fallback"
 
 
 def test_binance_meta_testnet_404(monkeypatch, caplog):
@@ -73,8 +73,8 @@ def test_binance_meta_testnet_404(monkeypatch, caplog):
 
     monkeypatch.setattr('src.exchange.binance_meta.requests.get', fake_get)
     meta = BinanceMeta("k", "s", use_testnet=True)
-    with caplog.at_level("WARNING"):
+    with caplog.at_level("INFO"):
         fees = meta.get_account_trade_fees()
     assert fees["SPOT"]["maker"] == 0.001
-    assert meta.last_fee_origin == "Fallback (testnet)"
-    assert "testnet no soporta tradeFee" in caplog.text
+    assert meta.last_fee_origin == "Fuente: Fallback testnet"
+    assert "Testnet sin endpoint tradeFee" in caplog.text
