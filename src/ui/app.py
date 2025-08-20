@@ -1,9 +1,10 @@
-import os, io, sys, json, subprocess, time
+import os, io, sys, json, subprocess, time, uuid
 from datetime import datetime, UTC
 import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
+from src.ui.tasks import run_bg, poll, set_progress
 
 from src.utils.config import load_config
 from src.utils import paths
@@ -413,17 +414,38 @@ selected_symbols = selected_valid
 cfg["symbols"] = selected_valid
 
 st.subheader("📥 Datos")
-if st.button("Preparar datos (auto)"):
-    status = st.status("Descubriendo…", expanded=True)
+if "prep_job" not in st.session_state:
+    st.session_state["prep_job"] = None
 
-    def _report(msg: str) -> None:
-        status.update(label=msg)
+status_box = st.empty()
 
-    try:
-        prepare_data(progress_cb=_report)
-        status.update(label="Refresco en marcha ✔", state="complete")
-    except Exception as err:
-        status.update(label=f"Error: {err}", state="error")
+job_id = st.session_state.get("prep_job")
+if job_id:
+    info = poll(job_id)
+    label = info.get("progress") or "Preparando…"
+    state = info.get("state")
+    if state == "running":
+        status_box.status(label, expanded=True)
+        time.sleep(0.5)
+        st.rerun()
+    elif state == "done":
+        status_box.status(label or "Refresco en marcha ✔", state="complete")
+        st.session_state["data_ready"] = True
+        st.session_state["prep_job"] = None
+        st.rerun()
+    elif state == "error":
+        status_box.status(f"Error: {info.get('error')}", state="error")
+        st.session_state["prep_job"] = None
+else:
+    if st.button("Preparar datos (auto)"):
+        job_id = f"prepare_data-{uuid.uuid4().hex[:8]}"
+
+        def _report(msg: str, j=job_id) -> None:
+            set_progress(j, msg)
+
+        run_bg("prepare_data", prepare_data, job_id=job_id, progress_cb=_report)
+        st.session_state["prep_job"] = job_id
+        st.rerun()
 
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
