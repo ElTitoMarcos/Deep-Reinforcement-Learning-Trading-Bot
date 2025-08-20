@@ -59,9 +59,14 @@ def write_parquet_atomic(df: pd.DataFrame, path: str | os.PathLike[str]) -> None
     tmp = p.with_suffix(p.suffix + ".tmp")
     df.to_parquet(posix(tmp), index=False)
     # ensure data is persisted before rename
-    with open(posix(tmp), "rb") as fh:
-        fh.flush()
-        os.fsync(fh.fileno())
+    try:
+        fd = os.open(posix(tmp), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+    except OSError:
+        pass
     os.replace(posix(tmp), posix(p))
 
 
