@@ -3,7 +3,7 @@ from datetime import datetime, UTC
 import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe
 from pathlib import Path
-from src.auto import reward_human_names
+from src.auto import reward_human_names, AlgoController
 
 from src.utils.config import load_config
 from src.utils import paths
@@ -154,7 +154,7 @@ with st.sidebar:
 
     st.caption("Reward heads (pesos)")
     rw = cfg.get("reward_weights", {"pnl": 1.0, "turn": 0.1, "dd": 0.2, "vol": 0.1})
-    tab_manual, tab_auto = st.tabs(["Manual", "Auto-tuning"])
+    tab_manual, tab_auto, tab_strategy = st.tabs(["Manual", "Auto-tuning", "Estrategia"])
     with tab_manual:
         beneficio = st.number_input(
             "Beneficio (más alto = priorizar ganar dinero)",
@@ -253,6 +253,18 @@ with st.sidebar:
             st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
         if scores:
             st.line_chart(scores)
+
+    with tab_strategy:
+        ctrl: AlgoController = st.session_state.get("algo_ctrl") or AlgoController()
+        fixed = st.session_state.get("algo_fixed", False)
+        if st.button("Desfijar" if fixed else "Fijar", key="fix_algo"):
+            fixed = not fixed
+        ctrl.fixed = fixed
+        mapping = ctrl.decide({}, {}, {})
+        st.json(mapping)
+        st.caption(ctrl.explain(mapping))
+        st.session_state["algo_ctrl"] = ctrl
+        st.session_state["algo_fixed"] = fixed
 
     stats = cfg.get("stats", {})
     env_caps = {
