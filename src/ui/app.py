@@ -1,4 +1,4 @@
-import os, io, sys, json, subprocess, time, uuid
+import os, io, sys, json, subprocess, time, uuid, shutil
 from datetime import datetime, UTC
 import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile
@@ -72,6 +72,15 @@ if device == "cuda":
 else:
     threads = set_cpu_threads()
     st.sidebar.info(f"Dispositivo: CPU ({threads} hilos)")
+    if shutil.which("nvidia-smi"):
+        try:
+            res = subprocess.run(["nvidia-smi"], capture_output=True)
+            if res.returncode == 0:
+                st.sidebar.warning(
+                    "Se detectó GPU pero PyTorch no tiene soporte CUDA; considera reinstalarlo con CUDA."
+                )
+        except Exception:
+            pass
 
 with st.sidebar:
     st.header("Conexiones")
@@ -547,6 +556,10 @@ if st.button("🚀 Entrenar"):
                 st.error(f"Fallo al entrenar: {e}")
 
         log_box = st.empty()
+        progress_bar = st.progress(0.0)
+        progress_stats = st.empty()
+        target_steps = int(1_000_000)
+        stage = "training"
         thread = threading.Thread(target=_run_train, daemon=True)
         thread.start()
         lines: list[str] = []
@@ -554,8 +567,17 @@ if st.button("🚀 Entrenar"):
         while thread.is_alive():
             try:
                 entry = next(log_iter)
-                lines.append(f"[{entry['kind']}] {entry['message']}")
+                msg = entry["message"]
+                lines.append(f"[{entry['kind']}] {msg}")
                 log_box.code("\n".join(lines[-200:]))
+                if msg.startswith("[heartbeat]"):
+                    parts = dict(p.split("=") for p in msg.replace("[heartbeat]", "").strip().split())
+                    steps = int(parts.get("steps", 0))
+                    reward = float(parts.get("reward_mean", 0.0))
+                    progress_bar.progress(min(steps / target_steps, 1.0))
+                    progress_stats.text(
+                        f"Etapa: {stage} | Pasos: {steps}/{target_steps} | Reward medio: {reward:.4f}"
+                    )
             except Exception:
                 pass
         thread.join()
@@ -563,7 +585,16 @@ if st.button("🚀 Entrenar"):
         for _ in range(50):
             try:
                 entry = next(log_iter)
-                lines.append(f"[{entry['kind']}] {entry['message']}")
+                msg = entry["message"]
+                lines.append(f"[{entry['kind']}] {msg}")
+                if msg.startswith("[heartbeat]"):
+                    parts = dict(p.split("=") for p in msg.replace("[heartbeat]", "").strip().split())
+                    steps = int(parts.get("steps", 0))
+                    reward = float(parts.get("reward_mean", 0.0))
+                    progress_bar.progress(min(steps / target_steps, 1.0))
+                    progress_stats.text(
+                        f"Etapa: {stage} | Pasos: {steps}/{target_steps} | Reward medio: {reward:.4f}"
+                    )
             except Exception:
                 break
         log_box.code("\n".join(lines[-200:]))

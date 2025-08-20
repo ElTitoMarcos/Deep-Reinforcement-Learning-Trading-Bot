@@ -31,6 +31,12 @@ import socket
 import numpy as np
 import pandas as pd
 import logging
+try:  # pragma: no cover - optional dependency
+    from stable_baselines3.common.callbacks import BaseCallback
+except Exception:  # pragma: no cover - fallback when sb3 is missing
+    class BaseCallback:  # type: ignore
+        def __init__(self, *args, **kwargs):
+            pass
 
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
@@ -113,6 +119,22 @@ class TinyDQN:
 
 # ---------------------------------------------------------------------------
 # Helper functions ----------------------------------------------------------
+
+
+class UiHeartbeatCallback(BaseCallback):
+    def __init__(self, every_steps: int = 1000):
+        super().__init__()
+        self.every_steps = every_steps
+        self._log = logging.getLogger(__name__)
+
+    def _on_step(self) -> bool:  # type: ignore[override]
+        if self.num_timesteps % self.every_steps == 0:
+            try:
+                reward = self.training_env.get_attr("recent_reward_mean")[0] or 0.0
+            except Exception:
+                reward = 0.0
+            self._log.info("[heartbeat] steps=%d reward_mean=%.4f", self.num_timesteps, reward)
+        return True
 
 
 def has_sb3() -> bool:
@@ -916,23 +938,31 @@ def train_dqn(
 
 
 # ---------------------------------------------------------------------------
-# PPO via SB3 (optional) ----------------------------------------------------
+# SB3 helpers ---------------------------------------------------------------
 
 
-def train_ppo_sb3(env: TradingEnv, cfg: dict, timesteps: int, outdir: str, device: str) -> str:
-    from stable_baselines3 import PPO  # pragma: no cover - optional dependency
+def train_sb3_agent(
+    env: TradingEnv,
+    cfg: dict,
+    timesteps: int,
+    outdir: str,
+    device: str,
+    algo: str,
+) -> str:
+    from stable_baselines3 import PPO, DQN  # pragma: no cover - optional dependency
 
     os.makedirs(outdir, exist_ok=True)
-    ppo_cfg = cfg.get("ppo", {})
-    model = PPO(
-        "MlpPolicy",
-        env,
-        verbose=1,
-        learning_rate=ppo_cfg.get("learning_rate", 3e-4),
-        device=device,
-    )
-    model.learn(total_timesteps=timesteps)
-    path = Path(outdir) / "ppo_model.zip"
+    algo = algo.lower()
+    params = cfg.get(algo, {})
+    Model = PPO if algo == "ppo" else DQN
+    model = Model("MlpPolicy", env, verbose=1, device=device, **params)
+    callback = UiHeartbeatCallback()
+    try:
+        model.learn(total_timesteps=timesteps, callback=callback)
+    except Exception:  # pragma: no cover - surface traceback to UI
+        logging.getLogger(__name__).exception("sb3_learn_failed")
+        raise
+    path = Path(outdir) / f"{algo}_model.zip"
     model.save(paths.posix(path))
     return paths.posix(path)
 
@@ -1048,17 +1078,9 @@ def main() -> None:
 
     ckpt_dir = paths.checkpoints_dir()
     if algo_key == "dqn":
-        out = train_value_dqn(
-            env,
-            cfg,
-            args.timesteps,
-            outdir=paths.posix(ckpt_dir),
-            checkpoint_freq=args.checkpoint_freq,
-            continuous=args.continuous,
-            checkpoint_interval_min=args.checkpoint_interval_min,
-            max_hours=args.max_hours,
-            logger=logger,
-        )
+        if not has_sb3():  # pragma: no cover - optional dependency
+            raise RuntimeError("stable-baselines3 is required for DQN training")
+        out = train_sb3_agent(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device, algo="dqn")
     elif algo_key == "tiny":
         out = train_dqn(
             env,
@@ -1071,22 +1093,12 @@ def main() -> None:
     elif algo_key == "ppo":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        out = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device)
+        out = train_sb3_agent(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device, algo="ppo")
     elif algo_key == "hybrid":
         if not has_sb3():  # pragma: no cover - optional dependency
             raise RuntimeError("stable-baselines3 is required for PPO training")
-        ppo_path = train_ppo_sb3(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device)
-        dqn_path = train_value_dqn(
-            env,
-            cfg,
-            args.timesteps,
-            outdir=paths.posix(ckpt_dir),
-            checkpoint_freq=args.checkpoint_freq,
-            continuous=args.continuous,
-            checkpoint_interval_min=args.checkpoint_interval_min,
-            max_hours=args.max_hours,
-            logger=logger,
-        )
+        ppo_path = train_sb3_agent(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device, algo="ppo")
+        dqn_path = train_sb3_agent(env, cfg, args.timesteps, outdir=paths.posix(ckpt_dir), device=device, algo="dqn")
         combo = {
             "dqn_signal": {
                 "checkpoint": dqn_path,
