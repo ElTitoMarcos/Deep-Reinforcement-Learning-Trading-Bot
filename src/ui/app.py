@@ -434,59 +434,68 @@ selected_symbols = selected_valid
 cfg["symbols"] = selected_valid
 
 st.subheader("🧹 Enriquecimiento y verificación de datos")
+st.caption(
+    "Descarga datos iniciales y los valida. Usa '🔄 Actualizar datos' para traer solo nuevos registros."
+)
 if st.button("Obtener y validar datos"):
     from pathlib import Path
     from datetime import datetime
 
-    ex = get_exchange(use_testnet=use_testnet)
-    # Re-descubrir por si hay nuevos símbolos disponibles
-    try:
-        discover_symbols(ex, top_n=5)
-    except Exception:
-        pass
-    if invalid_syms:
-        st.warning(
-            "Ignorando símbolos inválidos: "
-            + ", ".join(i["symbol"] for i in invalid_syms)
-        )
+    with st.spinner("Descargando y validando..."):
+        ex = get_exchange(use_testnet=use_testnet)
+        # Re-descubrir por si hay nuevos símbolos disponibles
+        try:
+            discover_symbols(ex, top_n=5)
+        except Exception:
+            pass
+        if invalid_syms:
+            st.warning(
+                "Ignorando símbolos inválidos: "
+                + ", ".join(i["symbol"] for i in invalid_syms)
+            )
 
-    meta_map = fetch_symbol_metadata(selected_symbols)
-    for sym in selected_symbols:
-        meta = meta_map.get(sym, {})
-        m_report = validate_metadata(meta)
-        series = fetch_extra_series(sym, timeframe=cfg.get("timeframe", "1m"))
-        ohlcv = series.get("ohlcv")
-        t_report = validate_trades(series.get("trades"))
-        o_report = validate_ohlcv(ohlcv)
-        combined = QualityReport()
-        combined.errors.extend(m_report.errors + o_report.errors + t_report.errors)
-        combined.warnings.extend(m_report.warnings + o_report.warnings + t_report.warnings)
-        summary = summarize(combined)
-        if passes(combined):
-            out_dir = Path("data/processed") / sym.replace("/", "")
-            out_dir.mkdir(parents=True, exist_ok=True)
-            data_file = ""
-            if ohlcv is not None and not ohlcv.empty:
-                try:
-                    ohlcv.reset_index().to_parquet(out_dir / "ohlcv.parquet", index=False)
-                    data_file = "ohlcv.parquet"
-                except Exception:
-                    ohlcv.reset_index().to_csv(out_dir / "ohlcv.csv", index=False)
-                    data_file = "ohlcv.csv"
-            manifest = {
-                "symbol": sym,
-                "obtained_at": datetime.now(UTC).isoformat(),
-                "source": meta.get("source"),
-                "qc": summary,
-                "data_file": data_file,
-            }
-            if meta.get("error"):
-                manifest["note"] = meta["error"]
-            with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
-            st.success(f"✅ {sym} - {summary}")
-        else:
-            st.error(f"❌ {sym} - {summary}")
+        meta_map = fetch_symbol_metadata(selected_symbols)
+        for sym in selected_symbols:
+            meta = meta_map.get(sym, {})
+            m_report = validate_metadata(meta)
+            series = fetch_extra_series(sym, timeframe=cfg.get("timeframe", "1m"))
+            ohlcv = series.get("ohlcv")
+            t_report = validate_trades(series.get("trades"))
+            o_report = validate_ohlcv(ohlcv)
+            combined = QualityReport()
+            combined.errors.extend(m_report.errors + o_report.errors + t_report.errors)
+            combined.warnings.extend(
+                m_report.warnings + o_report.warnings + t_report.warnings
+            )
+            summary = summarize(combined)
+            if passes(combined):
+                out_dir = Path("data/processed") / sym.replace("/", "")
+                out_dir.mkdir(parents=True, exist_ok=True)
+                data_file = ""
+                if ohlcv is not None and not ohlcv.empty:
+                    try:
+                        ohlcv.reset_index().to_parquet(
+                            out_dir / "ohlcv.parquet", index=False
+                        )
+                        data_file = "ohlcv.parquet"
+                    except Exception:
+                        ohlcv.reset_index().to_csv(out_dir / "ohlcv.csv", index=False)
+                        data_file = "ohlcv.csv"
+                manifest = {
+                    "symbol": sym,
+                    "obtained_at": datetime.now(UTC).isoformat(),
+                    "source": meta.get("source"),
+                    "qc": summary,
+                    "data_file": data_file,
+                }
+                if meta.get("error"):
+                    manifest["note"] = meta["error"]
+                with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
+                    json.dump(manifest, f, indent=2)
+                st.success(f"✅ {sym} - {summary}")
+            else:
+                st.error(f"❌ {sym} - {summary}")
+    st.success("Proceso completado")
 
 st.subheader("📥 Datos")
 st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
@@ -583,7 +592,8 @@ with colt2:
 algo_run = algo
 
 if st.button("🚀 Entrenar"):
-    import tempfile, yaml
+    import tempfile, yaml, threading, sys
+
     if invalid_syms:
         st.warning(
             "Ignorando símbolos inválidos: "
@@ -592,34 +602,51 @@ if st.button("🚀 Entrenar"):
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
         yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
         cfg_path = tmp.name
-    cmd = [
-        "python",
-        "-m",
-        "src.training.train_drl",
-        "--config",
-        cfg_path,
-        "--algo",
-        algo_run,
-        "--algo-reason",
-        choice["reason"],
-        "--timesteps",
-        str(int(timesteps)),
-    ]
-    st.info("Ejecutando: " + " ".join(cmd))
-    try:
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        st.code(res.stdout or "", language="bash")
-        if res.stderr:
-            st.error(res.stderr)
-    except Exception as e:
-        st.error(f"Fallo al entrenar: {e}")
+
+    def _run_train():
+        from src.training import train_drl
+
+        sys.argv = [
+            "train_drl",
+            "--config",
+            cfg_path,
+            "--algo",
+            algo_run,
+            "--algo-reason",
+            choice["reason"],
+            "--timesteps",
+            str(int(timesteps)),
+        ]
+        try:
+            train_drl.main()
+        except Exception as e:  # pragma: no cover - user feedback
+            st.error(f"Fallo al entrenar: {e}")
+
+    log_box = st.empty()
+    thread = threading.Thread(target=_run_train, daemon=True)
+    thread.start()
+    lines: list[str] = []
+    log_iter = log_subscribe(level="info")
+    while thread.is_alive():
+        try:
+            entry = next(log_iter)
+            lines.append(f"[{entry['kind']}] {entry['message']}")
+            log_box.code("\n".join(lines[-200:]))
+        except Exception:
+            pass
+    thread.join()
+    # Drain any remaining log lines
+    for _ in range(50):
+        try:
+            entry = next(log_iter)
+            lines.append(f"[{entry['kind']}] {entry['message']}")
+        except Exception:
+            break
+    log_box.code("\n".join(lines[-200:]))
+    st.success("Entrenamiento finalizado")
 
 st.subheader("📊 Evaluación / Backtest")
-colb1, colb2 = st.columns(2)
-with colb1:
-    policy = st.selectbox("Política", ["deterministic","stochastic","dqn"])
-with colb2:
-    st.empty()
+st.caption("La política se elige automáticamente según el algoritmo entrenado")
 
 if st.button("📈 Evaluar"):
     import tempfile, yaml
@@ -631,7 +658,7 @@ if st.button("📈 Evaluar"):
     with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
         yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
         cfg_path = tmp.name
-    cmd = ["python", "-m", "src.backtest.evaluate", "--config", cfg_path, "--policy", policy]
+    cmd = ["python", "-m", "src.backtest.evaluate", "--config", cfg_path]
     st.info("Ejecutando: " + " ".join(cmd))
     try:
         res = subprocess.run(cmd, capture_output=True, text=True)
@@ -705,4 +732,4 @@ placeholder.text("\n".join(st.session_state.get("log_lines", [])))
 
 if not st.session_state["log_paused"]:
     time.sleep(0.5)
-    st.experimental_rerun()
+    st.rerun()
