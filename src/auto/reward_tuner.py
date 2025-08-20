@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 import json
 import random
+import logging
 from pathlib import Path
 from typing import Dict, Tuple, Any
 
@@ -123,6 +124,16 @@ class RewardTuner:
         }
         reason = f"grad={gradients[key]:.4f}"
         self.last_action["reason"] = reason
+
+        delta_w = new_val - prev_weights[key]
+        expected = gradients[key] * delta_w
+        sens = "alta" if abs(gradients[key]) > 1 else "media" if abs(gradients[key]) > 0.1 else "baja"
+        name = human_names().get(key, key)
+        arrow = "↑" if delta_w > 0 else "↓" if delta_w < 0 else "→"
+        msg = (
+            f"{name} {arrow} {delta_w:+.2f} (sensibilidad {sens}; mejora esperada de score {expected:+.2f})"
+        )
+        logging.getLogger().info(msg, extra={"kind": "reward_tuner"})
         return dict(self.weights)
 
     # ------------------------------------------------------------------
@@ -163,10 +174,10 @@ def human_names() -> Dict[str, str]:
     """Return human friendly names for weight keys."""
 
     return {
-        "w_pnl": "PnL",
-        "w_drawdown": "Drawdown",
-        "w_volatility": "Volatilidad",
-        "w_turnover": "Rotación",
+        "w_pnl": "Beneficio",
+        "w_drawdown": "Protección ante rachas",
+        "w_volatility": "Suavidad",
+        "w_turnover": "Control de actividad",
     }
 
 

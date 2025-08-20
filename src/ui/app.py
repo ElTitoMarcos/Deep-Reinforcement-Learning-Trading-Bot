@@ -2,6 +2,8 @@ import os, io, sys, json, subprocess, time
 from datetime import datetime, UTC
 import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe
+from pathlib import Path
+from src.auto import reward_human_names
 
 from src.utils.config import load_config
 from src.utils import paths
@@ -152,30 +154,105 @@ with st.sidebar:
 
     st.caption("Reward heads (pesos)")
     rw = cfg.get("reward_weights", {"pnl": 1.0, "turn": 0.1, "dd": 0.2, "vol": 0.1})
-    beneficio = st.number_input(
-        "Beneficio (más alto = priorizar ganar dinero)",
-        value=float(rw.get("pnl", 1.0)),
-        help="Sube si buscas ganancias; sugerido 1.0",
-        key="w_pnl",
-    )
-    control_act = st.number_input(
-        "Control de actividad (más alto = operar menos)",
-        value=float(rw.get("turn", 0.1)),
-        help="Sube para operar menos; sugerido 0.1",
-        key="w_turn",
-    )
-    proteccion = st.number_input(
-        "Protección ante rachas malas (más alto = evitar caídas)",
-        value=float(rw.get("dd", 0.2)),
-        help="Sube para evitar caídas; sugerido 0.2",
-        key="w_dd",
-    )
-    suavidad = st.number_input(
-        "Suavidad de resultados (más alto = menos diente de sierra)",
-        value=float(rw.get("vol", 0.1)),
-        help="Sube para suavizar; sugerido 0.1",
-        key="w_vol",
-    )
+    tab_manual, tab_auto = st.tabs(["Manual", "Auto-tuning"])
+    with tab_manual:
+        beneficio = st.number_input(
+            "Beneficio (más alto = priorizar ganar dinero)",
+            value=float(rw.get("pnl", 1.0)),
+            help="Sube si buscas ganancias; sugerido 1.0",
+            key="w_pnl",
+        )
+        control_act = st.number_input(
+            "Control de actividad (más alto = operar menos)",
+            value=float(rw.get("turn", 0.1)),
+            help="Sube para operar menos; sugerido 0.1",
+            key="w_turn",
+        )
+        proteccion = st.number_input(
+            "Protección ante rachas malas (más alto = evitar caídas)",
+            value=float(rw.get("dd", 0.2)),
+            help="Sube para evitar caídas; sugerido 0.2",
+            key="w_dd",
+        )
+        suavidad = st.number_input(
+            "Suavidad de resultados (más alto = menos diente de sierra)",
+            value=float(rw.get("vol", 0.1)),
+            help="Sube para suavizar; sugerido 0.1",
+            key="w_vol",
+        )
+    cfg["reward_weights"] = {
+        "pnl": beneficio,
+        "turn": control_act,
+        "dd": proteccion,
+        "vol": suavidad,
+    }
+
+    with tab_auto:
+        import pandas as pd
+
+        rt_cfg = cfg.get("reward_tuner", {})
+        enabled = st.checkbox(
+            "Ajustar pesos automáticamente",
+            value=bool(rt_cfg.get("enabled", True)),
+        )
+        freq = st.number_input(
+            "Frecuencia (episodios)",
+            value=int(rt_cfg.get("freq_episodes", 50)),
+            min_value=1,
+            step=1,
+            help="Cada cuántos episodios proponer ajustes",
+        )
+        delta = st.number_input(
+            "Amplitud máxima por iteración",
+            value=float(rt_cfg.get("delta", 0.05)),
+            min_value=0.0,
+            step=0.01,
+            format="%.2f",
+        )
+        cfg["reward_tuner"] = {
+            **rt_cfg,
+            "enabled": bool(enabled),
+            "freq_episodes": int(freq),
+            "delta": float(delta),
+        }
+
+        hist_file = Path("reports/reward_tuning_history.jsonl")
+        weights = {
+            "w_pnl": st.session_state.get("w_pnl", rw.get("pnl", 1.0)),
+            "w_drawdown": st.session_state.get("w_dd", rw.get("dd", 0.2)),
+            "w_volatility": st.session_state.get("w_vol", rw.get("vol", 0.1)),
+            "w_turnover": st.session_state.get("w_turn", rw.get("turn", 0.1)),
+        }
+        diffs = {k: 0.0 for k in weights}
+        scores: list[float] = []
+        if hist_file.exists():
+            lines = hist_file.read_text().splitlines()
+            if lines:
+                last = json.loads(lines[-1])
+                weights = last.get("after", weights)
+                before = last.get("before", {})
+                for k in weights:
+                    diffs[k] = weights[k] - before.get(k, weights[k])
+                scores = [json.loads(l).get("score_after", 0.0) for l in lines[-20:]]
+        names = reward_human_names()
+        rows = []
+        for k in ["w_pnl", "w_drawdown", "w_volatility", "w_turnover"]:
+            val = weights.get(k, 0.0)
+            diff = diffs.get(k, 0.0)
+            arrow = "↑" if diff > 0 else "↓" if diff < 0 else "→"
+            color = "green" if diff > 0 else "red" if diff < 0 else "gray"
+            rows.append(
+                {
+                    "Peso": names.get(k, k),
+                    "Valor": f"{val:.2f}",
+                    "Cambio": f"<span style='color:{color}'>{arrow} {diff:+.2f}</span>",
+                }
+            )
+        if rows:
+            df = pd.DataFrame(rows)
+            st.markdown(df.to_html(escape=False, index=False), unsafe_allow_html=True)
+        if scores:
+            st.line_chart(scores)
 
     stats = cfg.get("stats", {})
     env_caps = {
@@ -317,6 +394,7 @@ with st.sidebar:
                 "dd": proteccion,
                 "vol": suavidad,
             },
+            "reward_tuner": cfg.get("reward_tuner", {}),
             "paths": paths_cfg,
         }
         os.makedirs(os.path.dirname(CONFIG_PATH), exist_ok=True)
@@ -567,7 +645,7 @@ if st.button("📈 Evaluar"):
     except Exception as e:
         st.error(f"Fallo al evaluar: {e}")
 st.subheader("Actividad en vivo")
-kind_options = ["trades", "riesgo", "datos", "checkpoints", "llm", "metricas"]
+kind_options = ["trades", "riesgo", "datos", "checkpoints", "llm", "metricas", "reward_tuner"]
 selected_kinds = st.multiselect("Tipos", kind_options, default=kind_options, key="log_kind_sel")
 
 if "log_paused" not in st.session_state:
