@@ -5,6 +5,7 @@ from .hparam_tuner import tune
 from .timeframe_adapter import propose_timeframe
 from .reward_tuner import RewardTuner, human_names as reward_human_names
 from .algo_controller import AlgoController
+from .stage_scheduler import StageScheduler
 
 __all__ = [
     "choose_algo",
@@ -13,4 +14,5 @@ __all__ = [
     "RewardTuner",
     "reward_human_names",
     "AlgoController",
+    "StageScheduler",
 ]

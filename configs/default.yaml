@@ -58,6 +58,13 @@ reward_tuner:
     kappa_consistency: 0.5
     mu_activity: 0.1
 
+auto:
+  stage_thresholds:
+    delta_score: 0.8
+    td_error: 0.1
+    drawdown: 0.2
+    trade_ratio: 0.5
+    
 # Deterministic policy params
 deterministic_policy:
   base_threshold: 0.001   # required 5-tick log-return to enter
