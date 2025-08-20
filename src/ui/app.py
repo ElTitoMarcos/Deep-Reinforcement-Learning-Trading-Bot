@@ -12,7 +12,7 @@ from src.utils.device import get_device, set_cpu_threads
 from src.data.ccxt_loader import get_exchange, save_history
 from src.data.ensure import ensure_ohlcv
 from src.data.volatility_windows import find_high_activity_windows
-from src.data.symbol_discovery import discover_symbols
+from src.data.symbol_discovery import discover_symbols, discover_summary
 from src.data import (
     fetch_symbol_metadata,
     fetch_extra_series,
@@ -73,27 +73,15 @@ with st.sidebar:
     mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
     use_testnet = mode == "Testnet"
     os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
-    st.caption("Símbolos sugeridos (auto)")
-    refresh_syms = st.button("Actualizar", key="refresh_syms")
-    if "symbol_checks" not in st.session_state or refresh_syms:
-        try:
-            ex = get_exchange(use_testnet=use_testnet)
-            suggested = discover_symbols(ex, top_n=20)
-        except Exception as e:
-            st.warning(f"Descubrimiento falló: {e}")
-            suggested = cfg.get("symbols") or ["BTC/USDT"]
-        checks = st.session_state.get("symbol_checks", {})
-        for s in suggested:
-            checks.setdefault(s, True)
-        st.session_state["symbol_checks"] = checks
-    checks = st.session_state.get("symbol_checks", {})
-    for sym in sorted(checks):
-        checks[sym] = st.checkbox(sym, value=checks[sym], key=f"sym_{sym}")
-    manual = st.text_input("Añadir manualmente", key="manual_sym").upper().strip()
-    if manual and manual not in checks:
-        checks[manual] = True
-    selected_symbols = [s for s, v in checks.items() if v]
+    try:
+        ex = get_exchange(use_testnet=use_testnet)
+        selected_symbols = discover_symbols(ex, top_n=20)
+    except Exception as e:
+        st.warning(f"Descubrimiento falló: {e}")
+        selected_symbols = cfg.get("symbols") or ["BTC/USDT"]
     cfg["symbols"] = selected_symbols
+    st.caption(discover_summary(selected_symbols))
+    st.code("\n".join(selected_symbols))
 
     fees_dict = cfg.get("fees", {})
     default_fee_taker = float(fees_dict.get("taker", 0.001))
