@@ -429,7 +429,9 @@ st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
 with colt1:
     st.caption(f"Algoritmo: {algo} — {choice['reason']}")
-    timesteps = st.number_input("Timesteps", value=20000, step=1000)
+    st.caption(
+        "Los timesteps se adaptan automáticamente por etapa (puedes activar asesor LLM en Ajustes)."
+    )
 with colt2:
     st.empty()
 algo_run = algo
@@ -460,7 +462,7 @@ if st.button("🚀 Entrenar"):
                 "--algo-reason",
                 choice["reason"],
                 "--timesteps",
-                str(int(timesteps)),
+                str(int(1_000_000)),
             ]
             try:
                 train_drl.main()
