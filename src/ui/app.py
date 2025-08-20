@@ -39,6 +39,8 @@ if "fee_taker" not in st.session_state:
     st.session_state["fee_taker"] = None
 if "fee_maker" not in st.session_state:
     st.session_state["fee_maker"] = None
+if "busy" not in st.session_state:
+    st.session_state["busy"] = False
 
 device = get_device()
 if device == "cuda":
@@ -441,61 +443,72 @@ if st.button("Obtener y validar datos"):
     from pathlib import Path
     from datetime import datetime
 
-    with st.spinner("Descargando y validando..."):
-        ex = get_exchange(use_testnet=use_testnet)
-        # Re-descubrir por si hay nuevos símbolos disponibles
-        try:
-            discover_symbols(ex, top_n=5)
-        except Exception:
-            pass
-        if invalid_syms:
-            st.warning(
-                "Ignorando símbolos inválidos: "
-                + ", ".join(i["symbol"] for i in invalid_syms)
-            )
+    st.session_state["busy"] = True
+    try:
+        with st.spinner("Descargando y validando..."):
+            ex = get_exchange(use_testnet=use_testnet)
+            # Re-descubrir por si hay nuevos símbolos disponibles
+            try:
+                discover_symbols(ex, top_n=5)
+            except Exception:
+                pass
+            if invalid_syms:
+                st.warning(
+                    "Ignorando símbolos inválidos: "
+                    + ", ".join(i["symbol"] for i in invalid_syms)
+                )
 
-        meta_map = fetch_symbol_metadata(selected_symbols)
-        for sym in selected_symbols:
-            meta = meta_map.get(sym, {})
-            m_report = validate_metadata(meta)
-            series = fetch_extra_series(sym, timeframe=cfg.get("timeframe", "1m"))
-            ohlcv = series.get("ohlcv")
-            t_report = validate_trades(series.get("trades"))
-            o_report = validate_ohlcv(ohlcv)
-            combined = QualityReport()
-            combined.errors.extend(m_report.errors + o_report.errors + t_report.errors)
-            combined.warnings.extend(
-                m_report.warnings + o_report.warnings + t_report.warnings
-            )
-            summary = summarize(combined)
-            if passes(combined):
-                out_dir = Path("data/processed") / sym.replace("/", "")
-                out_dir.mkdir(parents=True, exist_ok=True)
-                data_file = ""
-                if ohlcv is not None and not ohlcv.empty:
-                    try:
-                        ohlcv.reset_index().to_parquet(
-                            out_dir / "ohlcv.parquet", index=False
-                        )
-                        data_file = "ohlcv.parquet"
-                    except Exception:
-                        ohlcv.reset_index().to_csv(out_dir / "ohlcv.csv", index=False)
-                        data_file = "ohlcv.csv"
-                manifest = {
-                    "symbol": sym,
-                    "obtained_at": datetime.now(UTC).isoformat(),
-                    "source": meta.get("source"),
-                    "qc": summary,
-                    "data_file": data_file,
-                }
-                if meta.get("error"):
-                    manifest["note"] = meta["error"]
-                with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
-                    json.dump(manifest, f, indent=2)
-                st.success(f"✅ {sym} - {summary}")
-            else:
-                st.error(f"❌ {sym} - {summary}")
-    st.success("Proceso completado")
+            meta_map = fetch_symbol_metadata(selected_symbols)
+            for sym in selected_symbols:
+                meta = meta_map.get(sym, {})
+                m_report = validate_metadata(meta)
+                series = fetch_extra_series(sym, timeframe=cfg.get("timeframe", "1m"))
+                ohlcv = series.get("ohlcv")
+                t_report = validate_trades(series.get("trades"))
+                o_report = validate_ohlcv(ohlcv)
+                combined = QualityReport()
+                combined.errors.extend(m_report.errors + o_report.errors + t_report.errors)
+                combined.warnings.extend(
+                    m_report.warnings + o_report.warnings + t_report.warnings
+                )
+                summary = summarize(combined)
+                if passes(combined):
+                    out_dir = Path("data/processed") / sym.replace("/", "")
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    data_file = ""
+                    if ohlcv is not None and not ohlcv.empty:
+                        try:
+                            ohlcv.reset_index().to_parquet(
+                                out_dir / "ohlcv.parquet", index=False
+                            )
+                            data_file = "ohlcv.parquet"
+                        except Exception:
+                            ohlcv.reset_index().to_csv(
+                                out_dir / "ohlcv.csv", index=False
+                            )
+                            data_file = "ohlcv.csv"
+                    manifest = {
+                        "symbol": sym,
+                        "obtained_at": datetime.now(UTC).isoformat(),
+                        "source": meta.get("source"),
+                        "qc": summary,
+                        "data_file": data_file,
+                    }
+                    if meta.get("error"):
+                        manifest["note"] = meta["error"]
+                    with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
+                        json.dump(manifest, f, indent=2)
+                    st.success(f"✅ {sym} - {summary}")
+                else:
+                    st.error(f"❌ {sym} - {summary}")
+        st.success("Proceso completado")
+    except BaseException as err:
+        if isinstance(err, Exception):
+            st.error(f"Error: {err}")
+        else:
+            st.warning("Proceso cancelado")
+    finally:
+        st.session_state["busy"] = False
 
 st.subheader("📥 Datos")
 st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
@@ -716,7 +729,7 @@ if "log_iter" not in st.session_state or st.session_state.get("log_iter_kinds") 
     st.session_state["log_iter_kinds"] = set(selected_kinds)
     st.session_state["log_iter"] = log_subscribe(kinds=set(selected_kinds))
 
-if not st.session_state["log_paused"]:
+if not st.session_state.get("busy") and not st.session_state["log_paused"]:
     start = time.time()
     gen = st.session_state["log_iter"]
     while time.time() - start < 0.5:
@@ -730,6 +743,6 @@ if not st.session_state["log_paused"]:
     st.session_state["log_lines"] = st.session_state["log_lines"][-200:]
 placeholder.text("\n".join(st.session_state.get("log_lines", [])))
 
-if not st.session_state["log_paused"]:
+if not st.session_state.get("busy") and not st.session_state["log_paused"]:
     time.sleep(0.5)
     st.rerun()
