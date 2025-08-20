@@ -30,6 +30,7 @@ import socket
 
 import numpy as np
 import pandas as pd
+import logging
 
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
@@ -504,6 +505,9 @@ def train_value_dqn(
                         "trade_ratio": block_trades / max(1, block_steps),
                     }
                     stage_info = scheduler.on_tick(sched_metrics)
+                    logging.getLogger().info(
+                        f"TD-error medio {td_err_avg:.3f}", extra={"kind": "dqn_stability"}
+                    )
                     if stage_info.get("changed"):
                         logger.log(
                             "INFO",
