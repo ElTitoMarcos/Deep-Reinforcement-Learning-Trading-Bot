@@ -1,7 +1,7 @@
 import os, io, sys, json, subprocess, time
 from datetime import datetime, UTC
 import streamlit as st
-from src.ui.log_stream import subscribe as log_subscribe
+from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
 
