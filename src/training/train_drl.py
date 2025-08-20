@@ -34,6 +34,7 @@ import pandas as pd
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
 from ..auto.timeframe_adapter import propose_timeframe
+from ..auto import RewardTuner, AlgoController, StageScheduler
 from ..utils.config import load_config
 from ..utils.data_io import load_table, resample_to
 from ..utils.logging import ensure_logger, config_hash
@@ -322,12 +323,39 @@ def train_value_dqn(
     base_tf = cfg.get("timeframe", "1m")
     base_df = env.df.copy()
     current_tf = base_tf
+
+    rt_cfg = cfg.get("reward_tuner", {})
+    tuner = None
+    tune_freq = int(rt_cfg.get("freq_episodes", 50))
+    if rt_cfg.get("enabled"):
+        bounds = {k: tuple(v) for k, v in rt_cfg.get("bounds", {}).items()}
+        reports_dir = paths.reports_dir()
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        tuner = RewardTuner(
+            {
+                "w_pnl": env.w_pnl,
+                "w_drawdown": env.w_dd,
+                "w_volatility": env.w_vol,
+                "w_turnover": env.w_turn,
+            },
+            bounds,
+            reports_dir / "reward_tuning_history.jsonl",
+            delta=float(rt_cfg.get("delta", 0.05)),
+            score_weights=rt_cfg.get("score_weights", {}),
+        )
+    stage_freq = int(auto_cfg.get("stage_freq_episodes", tune_freq))
+    scheduler = StageScheduler(auto_cfg.get("stage_thresholds", {}), llm_client if llm_cfg.get("enabled") else None)
+    controller = AlgoController(llm_client if llm_cfg.get("enabled") else None)
+    stage_info = {"stage": "warmup", "allow_tuner": False, "allow_mapping": False}
+    block_metrics = {"pnl": 0.0, "drawdown": 0.0, "volatility": 0.0, "turnover": 0.0}
+    block_trades = 0
+    block_steps = 0
+    td_err_avg = 0.0
     exchange_name = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     data_path = paths.raw_parquet_path(exchange_name, symbol, base_tf)
     if continuous:
         start_refresh_worker(cfg.get("symbols", []), base_tf)
-
     total_steps = 0
     episode = 0
     total_reward = 0.0
@@ -384,12 +412,22 @@ def train_value_dqn(
                 ep_reward = 0.0
                 while not done and total_steps < timesteps:
                     action = agent.act(obs)
-                    next_obs, reward, done, trunc, _info = env.step(action)
+                    next_obs, reward, done, trunc, info = env.step(action)
                     agent.remember(obs, action, reward, next_obs, done or trunc)
-                    agent.train_step()
+                    loss = agent.train_step()
+                    if loss is not None:
+                        td_err_avg = 0.99 * td_err_avg + 0.01 * loss if td_err_avg else float(loss)
                     obs = next_obs
                     total_steps += 1
                     ep_reward += reward
+                    terms = info.get("reward_terms", {})
+                    block_metrics["pnl"] += float(terms.get("pnl", 0.0))
+                    block_metrics["drawdown"] += float(terms.get("drawdown", 0.0))
+                    block_metrics["volatility"] += float(terms.get("volatility", 0.0))
+                    block_metrics["turnover"] += float(terms.get("turnover", 0.0))
+                    if float(terms.get("turnover", 0.0)) > 0:
+                        block_trades += 1
+                    block_steps += 1
                     now = time.time()
                     if (
                         llm_client
@@ -444,6 +482,79 @@ def train_value_dqn(
                             return final_path
     
                 total_reward += ep_reward
+                if episode % stage_freq == 0:
+                    metrics = {
+                        "pnl": block_metrics["pnl"],
+                        "drawdown": block_metrics["drawdown"],
+                        "volatility": block_metrics["volatility"],
+                        "turnover": block_metrics["turnover"],
+                        "consistency": -block_metrics["volatility"],
+                        "activity": block_metrics["turnover"],
+                    }
+                    score_val = tuner.score(metrics) if tuner else (
+                        metrics["pnl"]
+                        - metrics["drawdown"]
+                        - metrics["volatility"]
+                        - metrics["turnover"]
+                    )
+                    sched_metrics = {
+                        "score": score_val,
+                        "td_error": td_err_avg,
+                        "drawdown": metrics["drawdown"],
+                        "trade_ratio": block_trades / max(1, block_steps),
+                    }
+                    stage_info = scheduler.on_tick(sched_metrics)
+                    if stage_info.get("changed"):
+                        logger.log(
+                            "INFO",
+                            "stage_transition",
+                            previous=stage_info.get("prev"),
+                            new=stage_info["stage"],
+                            reason=stage_info.get("reason"),
+                        )
+                        print(
+                            f"Stage: {stage_info['prev']} \u2192 {stage_info['stage']} ({stage_info.get('reason')})",
+                        )
+                        if stage_info.get("allow_mapping"):
+                            mapping = controller.decide(
+                                {"stage": stage_info["stage"]},
+                                {
+                                    "volatility": metrics["volatility"],
+                                    "trade_ratio": sched_metrics["trade_ratio"],
+                                },
+                                {
+                                    "td_error": sched_metrics["td_error"],
+                                    "drawdown": metrics["drawdown"],
+                                },
+                            )
+                            explanation = controller.explain(mapping)
+                            logger.log("INFO", "algo_mapping", **mapping, explanation=explanation)
+                            print(f"Mapping: {mapping} ({explanation})")
+                    if tuner and tuner.last_action is not None:
+                        tuner.confirm(metrics)
+                    if tuner and stage_info.get("allow_tuner"):
+                        new_w = tuner.propose(metrics)
+                        env.w_pnl = new_w["w_pnl"]
+                        env.w_dd = new_w["w_drawdown"]
+                        env.w_vol = new_w["w_volatility"]
+                        env.w_turn = new_w["w_turnover"]
+                        upd = tuner.last_action
+                        if upd:
+                            arrow = "↑" if upd["direction"] == "up" else "↓"
+                            logger.log(
+                                "INFO",
+                                "reward_weight_adjusted",
+                                weight=upd["key"],
+                                direction=upd["direction"],
+                                value=new_w[upd["key"]],
+                                reason=upd.get("reason"),
+                            )
+                            print(
+                                f"RewardTuner {upd['key']} {arrow} -> {new_w[upd['key']]:.3f} ({upd.get('reason')})",
+                            )
+                    block_metrics = {k: 0.0 for k in block_metrics}
+                    block_trades = 0
+                    block_steps = 0
                 if (
                     llm_client
                     and llm_mode == "episodes"
@@ -542,6 +653,34 @@ def train_dqn(
     base_df = env.df.copy()
     current_tf = base_tf
 
+    rt_cfg = cfg.get("reward_tuner", {})
+    tuner = None
+    tune_freq = int(rt_cfg.get("freq_episodes", 50))
+    if rt_cfg.get("enabled"):
+        bounds = {k: tuple(v) for k, v in rt_cfg.get("bounds", {}).items()}
+        reports_dir = paths.reports_dir()
+        reports_dir.mkdir(parents=True, exist_ok=True)
+        tuner = RewardTuner(
+            {
+                "w_pnl": env.w_pnl,
+                "w_drawdown": env.w_dd,
+                "w_volatility": env.w_vol,
+                "w_turnover": env.w_turn,
+            },
+            bounds,
+            reports_dir / "reward_tuning_history.jsonl",
+            delta=float(rt_cfg.get("delta", 0.05)),
+            score_weights=rt_cfg.get("score_weights", {}),
+        )
+    stage_freq = int(auto_cfg.get("stage_freq_episodes", tune_freq))
+    scheduler = StageScheduler(auto_cfg.get("stage_thresholds", {}), llm_client if llm_cfg.get("enabled") else None)
+    controller = AlgoController(llm_client if llm_cfg.get("enabled") else None)
+    stage_info = {"stage": "warmup", "allow_tuner": False, "allow_mapping": False}
+    block_metrics = {"pnl": 0.0, "drawdown": 0.0, "volatility": 0.0, "turnover": 0.0}
+    block_trades = 0
+    block_steps = 0
+    td_err_avg = 0.0
+
     eps_start = dqn_cfg.get("epsilon_start", 1.0)
     eps_end = dqn_cfg.get("epsilon_end", 0.05)
     eps_decay_steps = dqn_cfg.get("epsilon_decay_steps", timesteps // 2 or 1)
@@ -591,12 +730,20 @@ def train_dqn(
         while not done and total_steps < timesteps:
             eps = max(eps_end, eps_start - (eps_start - eps_end) * (total_steps / eps_decay_steps))
             action = agent.act(obs, eps)
-            next_obs, reward, done, trunc, _info = env.step(action)
+            next_obs, reward, done, trunc, info = env.step(action)
             agent.remember(obs, action, reward, next_obs, done or trunc)
             agent.update()
             obs = next_obs
             total_steps += 1
             ep_reward += reward
+            terms = info.get("reward_terms", {})
+            block_metrics["pnl"] += float(terms.get("pnl", 0.0))
+            block_metrics["drawdown"] += float(terms.get("drawdown", 0.0))
+            block_metrics["volatility"] += float(terms.get("volatility", 0.0))
+            block_metrics["turnover"] += float(terms.get("turnover", 0.0))
+            if float(terms.get("turnover", 0.0)) > 0:
+                block_trades += 1
+            block_steps += 1
             now = time.time()
             if (
                 llm_client
@@ -615,9 +762,80 @@ def train_dqn(
                     llm_file,
                     logger,
                 )
-                last_llm_time = now
+            last_llm_time = now
 
         total_reward += ep_reward
+        if episode % stage_freq == 0:
+            metrics = {
+                "pnl": block_metrics["pnl"],
+                "drawdown": block_metrics["drawdown"],
+                "volatility": block_metrics["volatility"],
+                "turnover": block_metrics["turnover"],
+                "consistency": -block_metrics["volatility"],
+                "activity": block_metrics["turnover"],
+            }
+            score_val = tuner.score(metrics) if tuner else (
+                metrics["pnl"] - metrics["drawdown"] - metrics["volatility"] - metrics["turnover"]
+            )
+            sched_metrics = {
+                "score": score_val,
+                "td_error": td_err_avg,
+                "drawdown": metrics["drawdown"],
+                "trade_ratio": block_trades / max(1, block_steps),
+            }
+            stage_info = scheduler.on_tick(sched_metrics)
+            if stage_info.get("changed"):
+                logger.log(
+                    "INFO",
+                    "stage_transition",
+                    previous=stage_info.get("prev"),
+                    new=stage_info["stage"],
+                    reason=stage_info.get("reason"),
+                )
+                print(
+                    f"Stage: {stage_info['prev']} \u2192 {stage_info['stage']} ({stage_info.get('reason')})",
+                )
+                if stage_info.get("allow_mapping"):
+                    mapping = controller.decide(
+                        {"stage": stage_info["stage"]},
+                        {
+                            "volatility": metrics["volatility"],
+                            "trade_ratio": sched_metrics["trade_ratio"],
+                        },
+                        {
+                            "td_error": sched_metrics["td_error"],
+                            "drawdown": metrics["drawdown"],
+                        },
+                    )
+                    explanation = controller.explain(mapping)
+                    logger.log("INFO", "algo_mapping", **mapping, explanation=explanation)
+                    print(f"Mapping: {mapping} ({explanation})")
+            if tuner and tuner.last_action is not None:
+                tuner.confirm(metrics)
+            if tuner and stage_info.get("allow_tuner"):
+                new_w = tuner.propose(metrics)
+                env.w_pnl = new_w["w_pnl"]
+                env.w_dd = new_w["w_drawdown"]
+                env.w_vol = new_w["w_volatility"]
+                env.w_turn = new_w["w_turnover"]
+                upd = tuner.last_action
+                if upd:
+                    arrow = "↑" if upd["direction"] == "up" else "↓"
+                    logger.log(
+                        "INFO",
+                        "reward_weight_adjusted",
+                        weight=upd["key"],
+                        direction=upd["direction"],
+                        value=new_w[upd["key"]],
+                        reason=upd.get("reason"),
+                    )
+                    print(
+                        f"RewardTuner {upd['key']} {arrow} -> {new_w[upd['key']]:.3f} ({upd.get('reason')})",
+                    )
+            block_metrics = {k: 0.0 for k in block_metrics}
+            block_trades = 0
+            block_steps = 0
+
         if (
             llm_client
             and llm_mode == "episodes"
