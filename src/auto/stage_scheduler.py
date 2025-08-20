@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict
@@ -93,6 +94,9 @@ class StageScheduler:
                         reason_parts.append(notes)
                     reason = ", ".join(reason_parts)
                     info = {"stage": self.stage, "prev": prev, "changed": True, "reason": reason}
+                    logging.getLogger().info(
+                        f"{prev} → {self.stage}", extra={"kind": "stage_scheduler"}
+                    )
                 else:
                     info = {"stage": self.stage, "changed": False}
             else:

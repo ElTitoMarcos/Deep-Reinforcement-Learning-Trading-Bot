@@ -58,6 +58,16 @@ reward_tuner:
     kappa_consistency: 0.5
     mu_activity: 0.1
 
+hybrid:
+  enabled: true
+  train_both: true
+
+algo_controller:
+  llm_enabled: false
+
+stage_scheduler:
+  enabled: true
+
 auto:
   stage_thresholds:
     delta_score: 0.8
