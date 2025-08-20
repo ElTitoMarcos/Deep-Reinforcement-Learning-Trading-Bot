@@ -523,30 +523,41 @@ if st.button("🔄 Actualizar datos"):
         upsert_parquet,
     )
 
-    ex = get_exchange(use_testnet=use_testnet)
-    tf_str = cfg.get("timeframe", "1m")
-    for sym in selected_symbols:
-        since = last_watermark(sym, tf_str)
-        if since is None:
-            since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
-        df_new = fetch_ohlcv_incremental(ex, sym, tf_str, since_ms=since)
-        if df_new.empty:
-            st.info(f"{sym}: sin datos nuevos")
-            continue
-        path = paths.raw_parquet_path(ex.id if hasattr(ex, "id") else "binance", sym, tf_str)
-        upsert_parquet(df_new, path)
-        manifest = {
-            "symbol": sym,
-            "timeframe": tf_str,
-            "watermark": int(df_new["ts"].max()),
-            "obtained_at": datetime.now(UTC).isoformat(),
-        }
-        with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
-            json.dump(manifest, f, indent=2)
-        st.success(f"{sym} actualizado")
+    st.session_state["busy"] = True
+    try:
+        ex = get_exchange(use_testnet=use_testnet)
+        tf_str = cfg.get("timeframe", "1m")
+        for sym in selected_symbols:
+            since = last_watermark(sym, tf_str)
+            if since is None:
+                since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
+            df_new = fetch_ohlcv_incremental(ex, sym, tf_str, since_ms=since)
+            if df_new.empty:
+                st.info(f"{sym}: sin datos nuevos")
+                continue
+            path = paths.raw_parquet_path(ex.id if hasattr(ex, "id") else "binance", sym, tf_str)
+            upsert_parquet(df_new, path)
+            manifest = {
+                "symbol": sym,
+                "timeframe": tf_str,
+                "watermark": int(df_new["ts"].max()),
+                "obtained_at": datetime.now(UTC).isoformat(),
+            }
+            with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
+                json.dump(manifest, f, indent=2)
+            st.success(f"{sym} actualizado")
+    except BaseException as err:
+        if isinstance(err, Exception):
+            st.error(f"Error: {err}")
+        else:
+            st.warning("Proceso cancelado")
+    finally:
+        st.session_state["busy"] = False
+
 if st.button("⬇️ Descargar histórico"):
     from datetime import datetime
     import pandas as pd
+    st.session_state["busy"] = True
     try:
         if invalid_syms:
             st.warning(
@@ -592,8 +603,13 @@ if st.button("⬇️ Descargar histórico"):
                     st.success(f"Guardado: {out}")
             except Exception as err:
                 st.warning(f"Fallo {sym}: {err}")
-    except Exception as e:
-        st.error(f"Error en descarga: {e}")
+    except BaseException as err:
+        if isinstance(err, Exception):
+            st.error(f"Error en descarga: {err}")
+        else:
+            st.warning("Proceso cancelado")
+    finally:
+        st.session_state["busy"] = False
 
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
@@ -607,98 +623,116 @@ algo_run = algo
 if st.button("🚀 Entrenar"):
     import tempfile, yaml, threading, sys
 
-    if invalid_syms:
-        st.warning(
-            "Ignorando símbolos inválidos: "
-            + ", ".join(i["symbol"] for i in invalid_syms)
-        )
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
-        yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
-        cfg_path = tmp.name
+    st.session_state["busy"] = True
+    try:
+        if invalid_syms:
+            st.warning(
+                "Ignorando símbolos inválidos: "
+                + ", ".join(i["symbol"] for i in invalid_syms)
+            )
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
+            yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
+            cfg_path = tmp.name
 
-    def _run_train():
-        from src.training import train_drl
+        def _run_train():
+            from src.training import train_drl
 
-        sys.argv = [
-            "train_drl",
-            "--config",
-            cfg_path,
-            "--algo",
-            algo_run,
-            "--algo-reason",
-            choice["reason"],
-            "--timesteps",
-            str(int(timesteps)),
-        ]
-        try:
-            train_drl.main()
-        except Exception as e:  # pragma: no cover - user feedback
-            st.error(f"Fallo al entrenar: {e}")
+            sys.argv = [
+                "train_drl",
+                "--config",
+                cfg_path,
+                "--algo",
+                algo_run,
+                "--algo-reason",
+                choice["reason"],
+                "--timesteps",
+                str(int(timesteps)),
+            ]
+            try:
+                train_drl.main()
+            except Exception as e:  # pragma: no cover - user feedback
+                st.error(f"Fallo al entrenar: {e}")
 
-    log_box = st.empty()
-    thread = threading.Thread(target=_run_train, daemon=True)
-    thread.start()
-    lines: list[str] = []
-    log_iter = log_subscribe(level="info")
-    while thread.is_alive():
-        try:
-            entry = next(log_iter)
-            lines.append(f"[{entry['kind']}] {entry['message']}")
-            log_box.code("\n".join(lines[-200:]))
-        except Exception:
-            pass
-    thread.join()
-    # Drain any remaining log lines
-    for _ in range(50):
-        try:
-            entry = next(log_iter)
-            lines.append(f"[{entry['kind']}] {entry['message']}")
-        except Exception:
-            break
-    log_box.code("\n".join(lines[-200:]))
-    st.success("Entrenamiento finalizado")
+        log_box = st.empty()
+        thread = threading.Thread(target=_run_train, daemon=True)
+        thread.start()
+        lines: list[str] = []
+        log_iter = log_subscribe(level="info")
+        while thread.is_alive():
+            try:
+                entry = next(log_iter)
+                lines.append(f"[{entry['kind']}] {entry['message']}")
+                log_box.code("\n".join(lines[-200:]))
+            except Exception:
+                pass
+        thread.join()
+        # Drain any remaining log lines
+        for _ in range(50):
+            try:
+                entry = next(log_iter)
+                lines.append(f"[{entry['kind']}] {entry['message']}")
+            except Exception:
+                break
+        log_box.code("\n".join(lines[-200:]))
+        st.success("Entrenamiento finalizado")
+    except BaseException as err:
+        if isinstance(err, Exception):
+            st.error(f"Error: {err}")
+        else:
+            st.warning("Proceso cancelado")
+    finally:
+        st.session_state["busy"] = False
 
 st.subheader("📊 Evaluación / Backtest")
 st.caption("La política se elige automáticamente según el algoritmo entrenado")
 
 if st.button("📈 Evaluar"):
     import tempfile, yaml
-    if invalid_syms:
-        st.warning(
-            "Ignorando símbolos inválidos: "
-            + ", ".join(i["symbol"] for i in invalid_syms)
-        )
-    with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
-        yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
-        cfg_path = tmp.name
-    cmd = ["python", "-m", "src.backtest.evaluate", "--config", cfg_path]
-    st.info("Ejecutando: " + " ".join(cmd))
+    st.session_state["busy"] = True
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True)
-        logs = res.stdout or ""
-        if logs:
-            st.expander("Logs").code(logs, language="bash")
+        if invalid_syms:
+            st.warning(
+                "Ignorando símbolos inválidos: "
+                + ", ".join(i["symbol"] for i in invalid_syms)
+            )
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".yaml") as tmp:
+            yaml.safe_dump(cfg, tmp, sort_keys=False, allow_unicode=True)
+            cfg_path = tmp.name
+        cmd = ["python", "-m", "src.backtest.evaluate", "--config", cfg_path]
+        st.info("Ejecutando: " + " ".join(cmd))
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True)
+            logs = res.stdout or ""
+            if logs:
+                st.expander("Logs").code(logs, language="bash")
 
-        reports_root = paths.reports_dir()
-        run_dirs = sorted(
-            reports_root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True
-        )
-        if run_dirs:
-            latest = run_dirs[0]
-            try:
-                with open(latest / "metrics.json") as f:
-                    results = json.load(f)
-                render_panel(results)
-                st.caption(f"Resumen guardado en {latest}")
-            except Exception as err:
-                st.error(f"No se pudo leer métricas: {err}")
+            reports_root = paths.reports_dir()
+            run_dirs = sorted(
+                reports_root.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True
+            )
+            if run_dirs:
+                latest = run_dirs[0]
+                try:
+                    with open(latest / "metrics.json") as f:
+                        results = json.load(f)
+                    render_panel(results)
+                    st.caption(f"Resumen guardado en {latest}")
+                except Exception as err:
+                    st.error(f"No se pudo leer métricas: {err}")
+            else:
+                st.warning("No hay reportes disponibles")
+
+            if res.stderr:
+                st.error(res.stderr)
+        except Exception as e:
+            st.error(f"Fallo al evaluar: {e}")
+    except BaseException as err:
+        if isinstance(err, Exception):
+            st.error(f"Error: {err}")
         else:
-            st.warning("No hay reportes disponibles")
-
-        if res.stderr:
-            st.error(res.stderr)
-    except Exception as e:
-        st.error(f"Fallo al evaluar: {e}")
+            st.warning("Proceso cancelado")
+    finally:
+        st.session_state["busy"] = False
 st.subheader("Actividad en vivo")
 kind_options = [
     "trades",
