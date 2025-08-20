@@ -35,7 +35,7 @@ import logging
 from ..env.trading_env import TradingEnv
 from ..auto.hparam_tuner import tune
 from ..auto.timeframe_adapter import propose_timeframe
-from ..auto import RewardTuner, AlgoController, StageScheduler
+from ..auto import RewardTuner, AlgoController, StageScheduler, plan_timesteps
 from ..utils.config import load_config
 from ..utils.data_io import load_table, resample_to
 from ..utils.logging import ensure_logger, config_hash
@@ -344,7 +344,6 @@ def train_value_dqn(
             delta=float(rt_cfg.get("delta", 0.05)),
             score_weights=rt_cfg.get("score_weights", {}),
         )
-    stage_freq = int(auto_cfg.get("stage_freq_episodes", tune_freq))
     scheduler = StageScheduler(auto_cfg.get("stage_thresholds", {}), llm_client if llm_cfg.get("enabled") else None)
     controller = AlgoController(llm_client if llm_cfg.get("enabled") else None)
     stage_info = {"stage": "warmup", "allow_tuner": False, "allow_mapping": False}
@@ -352,6 +351,19 @@ def train_value_dqn(
     block_trades = 0
     block_steps = 0
     td_err_avg = 0.0
+    prev_runs: list[int] = []
+    phase_size = plan_timesteps(stage_info, 1.0, {}, prev_runs, llm_client if llm_cfg.get("enabled") else None)
+    logger.log(
+        "INFO",
+        "phase_start",
+        stage=stage_info["stage"],
+        timesteps=phase_size,
+        reason=getattr(plan_timesteps, "last_reason", ""),
+    )
+    print(
+        f"Fase {stage_info['stage']} → {phase_size} timesteps (motivo: {getattr(plan_timesteps, 'last_reason', '')})"
+    )
+    phase_end = phase_size
     exchange_name = cfg.get("exchange", "binance")
     symbol = (cfg.get("symbols") or ["BTC/USDT"])[0]
     data_path = paths.raw_parquet_path(exchange_name, symbol, base_tf)
@@ -483,7 +495,7 @@ def train_value_dqn(
                             return final_path
     
                 total_reward += ep_reward
-                if episode % stage_freq == 0:
+                if total_steps >= phase_end:
                     metrics = {
                         "pnl": block_metrics["pnl"],
                         "drawdown": block_metrics["drawdown"],
@@ -556,6 +568,30 @@ def train_value_dqn(
                             print(
                                 f"RewardTuner {upd['key']} {arrow} -> {new_w[upd['key']]:.3f} ({upd.get('reason')})",
                             )
+                    data_rate = sched_metrics["trade_ratio"]
+                    stability = {
+                        "td_var": sched_metrics["td_error"],
+                        "score_trend": sched_metrics["score"],
+                        "drawdown": metrics["drawdown"],
+                    }
+                    phase_size = plan_timesteps(
+                        stage_info,
+                        data_rate,
+                        stability,
+                        prev_runs,
+                        llm_client if llm_cfg.get("enabled") else None,
+                    )
+                    logger.log(
+                        "INFO",
+                        "phase_start",
+                        stage=stage_info["stage"],
+                        timesteps=phase_size,
+                        reason=getattr(plan_timesteps, "last_reason", ""),
+                    )
+                    print(
+                        f"Fase {stage_info['stage']} → {phase_size} timesteps (motivo: {getattr(plan_timesteps, 'last_reason', '')})"
+                    )
+                    phase_end = total_steps + phase_size
                     block_metrics = {k: 0.0 for k in block_metrics}
                     block_trades = 0
                     block_steps = 0

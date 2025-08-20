@@ -6,6 +6,7 @@ from .timeframe_adapter import propose_timeframe
 from .reward_tuner import RewardTuner, human_names as reward_human_names
 from .algo_controller import AlgoController
 from .stage_scheduler import StageScheduler
+from .timestep_planner import plan_timesteps
 
 __all__ = [
     "choose_algo",
@@ -15,4 +16,5 @@ __all__ = [
     "reward_human_names",
     "AlgoController",
     "StageScheduler",
+    "plan_timesteps",
 ]

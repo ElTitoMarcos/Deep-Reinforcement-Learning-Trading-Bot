@@ -1,29 +1,19 @@
-import os, io, sys, json, subprocess, time
+import os, io, sys, json, subprocess, time, uuid
 from datetime import datetime, UTC
 import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
+from src.ui.tasks import run_bg, poll, set_progress
 
 from src.utils.config import load_config
 from src.utils import paths
-from src.reports.human_friendly import render_panel
+from src.reports.human_friendly import render_panel, to_human
 from src.utils.device import get_device, set_cpu_threads
-from src.data.ccxt_loader import get_exchange, save_history
-from src.data.ensure import ensure_ohlcv
-from src.data.volatility_windows import find_high_activity_windows
-from src.data.symbol_discovery import discover_symbols
-from src.data import (
-    fetch_symbol_metadata,
-    fetch_extra_series,
-    validate_symbols,
-    validate_ohlcv,
-    validate_metadata,
-    validate_trades,
-    passes,
-    summarize,
-)
-from src.data.quality import QualityReport
+from src.data.ccxt_loader import get_exchange
+from src.data.symbol_discovery import discover_symbols, discover_summary
+from src.data.pipeline import prepare_data
+from src.data import validate_symbols
 from src.exchange.binance_meta import BinanceMeta
 from dotenv import load_dotenv
 from src.auto.strategy_selector import choose_algo
@@ -73,27 +63,15 @@ with st.sidebar:
     mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
     use_testnet = mode == "Testnet"
     os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
-    st.caption("Símbolos sugeridos (auto)")
-    refresh_syms = st.button("Actualizar", key="refresh_syms")
-    if "symbol_checks" not in st.session_state or refresh_syms:
-        try:
-            ex = get_exchange(use_testnet=use_testnet)
-            suggested = discover_symbols(ex, top_n=20)
-        except Exception as e:
-            st.warning(f"Descubrimiento falló: {e}")
-            suggested = cfg.get("symbols") or ["BTC/USDT"]
-        checks = st.session_state.get("symbol_checks", {})
-        for s in suggested:
-            checks.setdefault(s, True)
-        st.session_state["symbol_checks"] = checks
-    checks = st.session_state.get("symbol_checks", {})
-    for sym in sorted(checks):
-        checks[sym] = st.checkbox(sym, value=checks[sym], key=f"sym_{sym}")
-    manual = st.text_input("Añadir manualmente", key="manual_sym").upper().strip()
-    if manual and manual not in checks:
-        checks[manual] = True
-    selected_symbols = [s for s, v in checks.items() if v]
+    try:
+        ex = get_exchange(use_testnet=use_testnet)
+        selected_symbols = discover_symbols(ex, top_n=20)
+    except Exception as e:
+        st.warning(f"Descubrimiento falló: {e}")
+        selected_symbols = cfg.get("symbols") or ["BTC/USDT"]
     cfg["symbols"] = selected_symbols
+    st.caption(discover_summary(selected_symbols))
+    st.code("\n".join(selected_symbols))
 
     fees_dict = cfg.get("fees", {})
     default_fee_taker = float(fees_dict.get("taker", 0.001))
@@ -435,187 +413,47 @@ if invalid_syms:
 selected_symbols = selected_valid
 cfg["symbols"] = selected_valid
 
-st.subheader("🧹 Enriquecimiento y verificación de datos")
-st.caption(
-    "Descarga datos iniciales y los valida. Usa '🔄 Actualizar datos' para traer solo nuevos registros."
-)
-if st.button("Obtener y validar datos"):
-    from pathlib import Path
-    from datetime import datetime
-
-    st.session_state["busy"] = True
-    try:
-        with st.spinner("Descargando y validando..."):
-            ex = get_exchange(use_testnet=use_testnet)
-            # Re-descubrir por si hay nuevos símbolos disponibles
-            try:
-                discover_symbols(ex, top_n=5)
-            except Exception:
-                pass
-            if invalid_syms:
-                st.warning(
-                    "Ignorando símbolos inválidos: "
-                    + ", ".join(i["symbol"] for i in invalid_syms)
-                )
-
-            meta_map = fetch_symbol_metadata(selected_symbols)
-            for sym in selected_symbols:
-                meta = meta_map.get(sym, {})
-                m_report = validate_metadata(meta)
-                series = fetch_extra_series(sym, timeframe=cfg.get("timeframe", "1m"))
-                ohlcv = series.get("ohlcv")
-                t_report = validate_trades(series.get("trades"))
-                o_report = validate_ohlcv(ohlcv)
-                combined = QualityReport()
-                combined.errors.extend(m_report.errors + o_report.errors + t_report.errors)
-                combined.warnings.extend(
-                    m_report.warnings + o_report.warnings + t_report.warnings
-                )
-                summary = summarize(combined)
-                if passes(combined):
-                    out_dir = Path("data/processed") / sym.replace("/", "")
-                    out_dir.mkdir(parents=True, exist_ok=True)
-                    data_file = ""
-                    if ohlcv is not None and not ohlcv.empty:
-                        try:
-                            ohlcv.reset_index().to_parquet(
-                                out_dir / "ohlcv.parquet", index=False
-                            )
-                            data_file = "ohlcv.parquet"
-                        except Exception:
-                            ohlcv.reset_index().to_csv(
-                                out_dir / "ohlcv.csv", index=False
-                            )
-                            data_file = "ohlcv.csv"
-                    manifest = {
-                        "symbol": sym,
-                        "obtained_at": datetime.now(UTC).isoformat(),
-                        "source": meta.get("source"),
-                        "qc": summary,
-                        "data_file": data_file,
-                    }
-                    if meta.get("error"):
-                        manifest["note"] = meta["error"]
-                    with open(out_dir / "manifest.json", "w", encoding="utf-8") as f:
-                        json.dump(manifest, f, indent=2)
-                    st.success(f"✅ {sym} - {summary}")
-                else:
-                    st.error(f"❌ {sym} - {summary}")
-        st.success("Proceso completado")
-    except BaseException as err:
-        if isinstance(err, Exception):
-            st.error(f"Error: {err}")
-        else:
-            st.warning("Proceso cancelado")
-    finally:
-        st.session_state["busy"] = False
-
 st.subheader("📥 Datos")
-st.caption("La precisión se elige automáticamente al mínimo disponible; el modelo puede reagrupar internamente")
-st.write("Construyendo dataset con tramos de alta actividad...")
-st.write("Seleccionados: " + ", ".join(selected_symbols))
-if st.button("🔄 Actualizar datos"):
-    from datetime import datetime, UTC, timedelta
-    import json
-    from src.data.incremental import (
-        last_watermark,
-        fetch_ohlcv_incremental,
-        upsert_parquet,
-    )
+if "prep_job" not in st.session_state:
+    st.session_state["prep_job"] = None
 
-    st.session_state["busy"] = True
-    try:
-        ex = get_exchange(use_testnet=use_testnet)
-        tf_str = cfg.get("timeframe", "1m")
-        for sym in selected_symbols:
-            since = last_watermark(sym, tf_str)
-            if since is None:
-                since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
-            df_new = fetch_ohlcv_incremental(ex, sym, tf_str, since_ms=since)
-            if df_new.empty:
-                st.info(f"{sym}: sin datos nuevos")
-                continue
-            path = paths.raw_parquet_path(ex.id if hasattr(ex, "id") else "binance", sym, tf_str)
-            upsert_parquet(df_new, path)
-            manifest = {
-                "symbol": sym,
-                "timeframe": tf_str,
-                "watermark": int(df_new["ts"].max()),
-                "obtained_at": datetime.now(UTC).isoformat(),
-            }
-            with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
-                json.dump(manifest, f, indent=2)
-            st.success(f"{sym} actualizado")
-    except BaseException as err:
-        if isinstance(err, Exception):
-            st.error(f"Error: {err}")
-        else:
-            st.warning("Proceso cancelado")
-    finally:
-        st.session_state["busy"] = False
+status_box = st.empty()
 
-if st.button("⬇️ Descargar histórico"):
-    from datetime import datetime
-    import pandas as pd
-    st.session_state["busy"] = True
-    try:
-        if invalid_syms:
-            st.warning(
-                "Ignorando símbolos inválidos: "
-                + ", ".join(i["symbol"] for i in invalid_syms)
-            )
-        tf_str = cfg.get("timeframe", "1m")
-        timeframe_min = int(tf_str.rstrip("m"))
-        st.info("Construyendo dataset con tramos de alta actividad...")
-        windows, lookback_h = find_high_activity_windows(
-            selected_symbols, timeframe_min
-        )
-        if windows:
-            st.write("Ventanas ejemplo:")
-            for s, e in windows[:5]:
-                st.write(
-                    f"{datetime.fromtimestamp(s/1000, UTC)} → {datetime.fromtimestamp(e/1000, UTC)}"
-                )
-        total_hours = sum((e - s) // 3600000 for s, e in windows)
-        st.info(f"Ventanas total: {total_hours}h")
-        ex = get_exchange(use_testnet=use_testnet)
-        for sym in selected_symbols:
-            try:
-                path = ensure_ohlcv(
-                    ex.id if hasattr(ex, "id") else "binance",
-                    sym,
-                    tf_str,
-                    hours=lookback_h,
-                )
-                df = pd.read_parquet(path)
-                parts = [df[(df.ts >= s) & (df.ts < e)] for s, e in windows]
-                if parts:
-                    merged = pd.concat(parts)
-                    tf = tf_str
-                    cfg["timeframe"] = tf
-                    out = save_history(
-                        merged,
-                        paths.RAW_DIR,
-                        ex.id if hasattr(ex, "id") else "binance",
-                        sym,
-                        tf,
-                    )
-                    st.success(f"Guardado: {out}")
-            except Exception as err:
-                st.warning(f"Fallo {sym}: {err}")
-    except BaseException as err:
-        if isinstance(err, Exception):
-            st.error(f"Error en descarga: {err}")
-        else:
-            st.warning("Proceso cancelado")
-    finally:
-        st.session_state["busy"] = False
+job_id = st.session_state.get("prep_job")
+if job_id:
+    info = poll(job_id)
+    label = info.get("progress") or "Preparando…"
+    state = info.get("state")
+    if state == "running":
+        status_box.status(label, expanded=True)
+        time.sleep(0.5)
+        st.rerun()
+    elif state == "done":
+        status_box.status(label or "Refresco en marcha ✔", state="complete")
+        st.session_state["data_ready"] = True
+        st.session_state["prep_job"] = None
+        st.rerun()
+    elif state == "error":
+        status_box.status(f"Error: {info.get('error')}", state="error")
+        st.session_state["prep_job"] = None
+else:
+    if st.button("Preparar datos (auto)"):
+        job_id = f"prepare_data-{uuid.uuid4().hex[:8]}"
+
+        def _report(msg: str, j=job_id) -> None:
+            set_progress(j, msg)
+
+        run_bg("prepare_data", prepare_data, job_id=job_id, progress_cb=_report)
+        st.session_state["prep_job"] = job_id
+        st.rerun()
 
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
 with colt1:
     st.caption(f"Algoritmo: {algo} — {choice['reason']}")
-    timesteps = st.number_input("Timesteps", value=20000, step=1000)
+    st.caption(
+        "Los timesteps se adaptan automáticamente por etapa (puedes activar asesor LLM en Ajustes)."
+    )
 with colt2:
     st.empty()
 algo_run = algo
@@ -646,7 +484,7 @@ if st.button("🚀 Entrenar"):
                 "--algo-reason",
                 choice["reason"],
                 "--timesteps",
-                str(int(timesteps)),
+                str(int(1_000_000)),
             ]
             try:
                 train_drl.main()
@@ -733,50 +571,59 @@ if st.button("📈 Evaluar"):
             st.warning("Proceso cancelado")
     finally:
         st.session_state["busy"] = False
-st.subheader("Actividad en vivo")
-kind_options = [
-    "trades",
-    "riesgo",
-    "datos",
-    "checkpoints",
-    "llm",
-    "metricas",
-    "reward_tuner",
-    "algo_controller",
-    "stage_scheduler",
-    "dqn_stability",
-    "ppo_control",
-]
-selected_kinds = st.multiselect("Tipos", kind_options, default=kind_options, key="log_kind_sel")
 
-if "log_paused" not in st.session_state:
-    st.session_state["log_paused"] = False
+# ---- Registro por áreas ---------------------------------------------------
 
-if st.button("Pausar" if not st.session_state["log_paused"] else "Reanudar", key="pause_feed"):
-    st.session_state["log_paused"] = not st.session_state["log_paused"]
+st.subheader("Registro")
 
-placeholder = st.empty()
-if "log_lines" not in st.session_state:
-    st.session_state["log_lines"] = []
+AREA_KINDS = {
+    "Datos": {"datos", "incremental_update", "qc"},
+    "Entrenamiento": {"reward_tuner", "dqn_stability", "checkpoints"},
+    "Evaluación": {"hybrid_weights", "performance"},
+    "LLM": {"llm"},
+    "Riesgo": {"riesgo"},
+}
 
-if "log_iter" not in st.session_state or st.session_state.get("log_iter_kinds") != set(selected_kinds):
-    st.session_state["log_iter_kinds"] = set(selected_kinds)
-    st.session_state["log_iter"] = log_subscribe(kinds=set(selected_kinds))
+tabs = st.tabs(list(AREA_KINDS.keys()))
 
-if not st.session_state.get("busy") and not st.session_state["log_paused"]:
-    start = time.time()
-    gen = st.session_state["log_iter"]
-    while time.time() - start < 0.5:
-        try:
-            item = next(gen)
-            st.session_state["log_lines"].append(item["message"])
-        except StopIteration:
-            break
-        except Exception:
-            break
-    st.session_state["log_lines"] = st.session_state["log_lines"][-200:]
-placeholder.text("\n".join(st.session_state.get("log_lines", [])))
+if "log_iters" not in st.session_state:
+    st.session_state["log_iters"] = {}
+if "log_buffers" not in st.session_state:
+    st.session_state["log_buffers"] = {}
 
-if not st.session_state.get("busy") and not st.session_state["log_paused"]:
+for tab, (area, kinds) in zip(tabs, AREA_KINDS.items()):
+    if area not in st.session_state["log_iters"]:
+        st.session_state["log_iters"][area] = log_subscribe(kinds=kinds)
+        st.session_state["log_buffers"][area] = []
+    with tab:
+        placeholder = st.empty()
+        if not st.session_state.get("busy"):
+            start = time.time()
+            gen = st.session_state["log_iters"][area]
+            buf = st.session_state["log_buffers"][area]
+            while time.time() - start < 0.5:
+                try:
+                    item = next(gen)
+                    buf.append(item)
+                except StopIteration:
+                    break
+                except Exception:
+                    break
+            st.session_state["log_buffers"][area] = buf[-200:]
+        lines = [to_human(it) for it in st.session_state["log_buffers"][area]]
+        placeholder.text("\n".join(lines))
+        if st.button("Exportar", key=f"export_{area}"):
+            run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+            run_dir = paths.reports_dir() / run_id
+            run_dir.mkdir(parents=True, exist_ok=True)
+            path = run_dir / "log_humano.md"
+            md_lines = [
+                f"- {it['time'].isoformat()} - {to_human(it)}"
+                for it in st.session_state["log_buffers"][area][-200:]
+            ]
+            path.write_text("\n".join(md_lines), encoding="utf-8")
+            st.success(f"Guardado en {path}")
+
+if not st.session_state.get("busy"):
     time.sleep(0.5)
     st.rerun()
