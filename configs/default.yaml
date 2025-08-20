@@ -64,7 +64,7 @@ auto:
     td_error: 0.1
     drawdown: 0.2
     trade_ratio: 0.5
-
+    
 # Deterministic policy params
 deterministic_policy:
   base_threshold: 0.001   # required 5-tick log-return to enter
