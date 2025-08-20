@@ -59,12 +59,14 @@ def _run(symbols: Iterable[str], timeframe: str, interval_min: float) -> None:
         _stop_event.wait(interval_min * 60)
 
 
-def start_refresh_worker(symbols: Iterable[str], timeframe_min: str) -> None:
+def start_refresh_worker(
+    symbols: Iterable[str], timeframe_min: str, every: float | None = None
+) -> None:
     """Start background thread to periodically refresh OHLCV data."""
     global _thread
     if _thread and _thread.is_alive():
         return
-    interval = _parse_interval(timeframe_min)
+    interval = every if every is not None else _parse_interval(timeframe_min)
     dataset_updated.clear()
     _stop_event.clear()
     _thread = threading.Thread(

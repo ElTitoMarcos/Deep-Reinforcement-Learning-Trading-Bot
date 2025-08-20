@@ -1,9 +1,8 @@
-from __future__ import annotations
-
 import logging
 
 from src.reports.human_friendly import episode_sentence
 from src.ui import log_stream
+from src.ui.log_stream import get_auto_profile
 
 
 def test_episode_sentence_basic() -> None:
@@ -16,6 +15,7 @@ def test_episode_sentence_basic() -> None:
 
 def test_log_stream_integration() -> None:
     log_stream._LOG_BUFFER.clear()
+    logging.getLogger().setLevel(logging.INFO)
     logging.getLogger().info(
         "",
         extra={
@@ -29,4 +29,17 @@ def test_log_stream_integration() -> None:
     assert "+1.0%" in item["message"]
     assert "consistencia baja" in item["message"]
     assert "actividad alta" in item["message"]
+
+
+def test_get_auto_profile_training() -> None:
+    prof = get_auto_profile("warmup")
+    assert prof == {"reward_tuner", "dqn_stability", "checkpoints"}
+
+
+def test_get_auto_profile_evaluation() -> None:
+    assert get_auto_profile("evaluation") == {"hybrid_weights", "performance"}
+
+
+def test_get_auto_profile_data() -> None:
+    assert get_auto_profile("data") == {"incremental_update", "qc"}
 

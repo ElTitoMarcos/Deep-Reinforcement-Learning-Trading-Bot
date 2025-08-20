@@ -1,4 +1,4 @@
-from src.data.symbol_discovery import discover_symbols
+from src.data.symbol_discovery import discover_symbols, discover_summary
 
 
 class DummyEx:
@@ -30,3 +30,12 @@ def test_discover_symbols_filters_and_sorts():
         "BNB/USDT",
         "LTC/USDT",
     ]
+
+
+def test_discover_summary_format():
+    syms = ["BTC/USDT", "ETH/USDT"]
+    summary = discover_summary(syms)
+    assert summary.startswith(
+        "Top 2 por volumen USDT, excluidos stablecoins, actualizado"
+    )
+    assert summary.endswith("UTC")
