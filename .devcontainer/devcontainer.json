@@ -1,0 +1,27 @@
+﻿{
+  "name": "drl-trading-dev",
+  "image": "mcr.microsoft.com/devcontainers/python:3.12-bookworm",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {}
+  },
+  "settings": {
+    "python.defaultInterpreterPath": "/workspaces/\/.venv/bin/python",
+    "terminal.integrated.defaultProfile.linux": "bash"
+  },
+  "postCreateCommand": "bash .devcontainer/postCreate.sh",
+  "postStartCommand": "bash .devcontainer/postStart.sh",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "ms-toolsai.jupyter"
+      ]
+    }
+  },
+  "remoteUser": "vscode",
+  "updateContentCommand": "pip install -e . || true",
+  "mounts": [
+    "source=python-pip-cache,target=/home/vscode/.cache/pip,type=volume"
+  ]
+}

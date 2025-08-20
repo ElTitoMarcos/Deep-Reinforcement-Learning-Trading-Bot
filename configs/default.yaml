@@ -1,34 +1,42 @@
-# Configuración principal
 exchange: binance
-symbols: ["BTC/USDT"]
-timeframe: "1m"   # "1s" si disponible; si no, se simula desde 1m
+binance_use_testnet: false
+symbols:
+- ETH/USDT
+- BTC/USDT
+- SOL/USDT
+- DOGE/USDT
+- XRP/USDT
+- FDUSD/USDT
+- LINK/USDT
+- BNB/USDT
+- ADA/USDT
+- TRX/USDT
+- SUI/USDT
+- ENA/USDT
+- BIO/USDT
+- AEUR/USDT
+- PEPE/USDT
+- PENGU/USDT
+- ARB/USDT
+- MEME/USDT
+- UNI/USDT
+- CFX/USDT
+timeframe: 1m
 fees:
   taker: 0.001
   maker: 0.001
-slippage_multiplier: 1.0  # safety factor on estimated slippage
-slippage_depth: 50
-slippage_static: 0.001
+slippage_multiplier: 1.0
 min_notional_usd: 10.0
 filters:
   tickSize: 0.01
   stepSize: 0.0001
-step_seconds: 60
-rate_limits:
-  per_minute: 1200
-
-# Hyperparámetros DRL
-algo: "ppo"               # "ppo" | "dqn"
+algo: ppo
 ppo:
-  learning_rate: 3.0e-4
-  n_steps: 2048
+  learning_rate: 0.000776174158803585
   batch_size: 64
-  gamma: 0.99
-  gae_lambda: 0.95
-  clip_range: 0.2
-  entropy_start: 0.01
-  entropy_end: 0.0
+  n_steps: 512
 dqn:
-  learning_rate: 1.0e-3
+  learning_rate: 0.001
   gamma: 0.99
   batch_size: 64
   buffer_size: 10000
@@ -36,66 +44,43 @@ dqn:
   epsilon_start: 1.0
   epsilon_end: 0.05
   epsilon_decay_steps: 10000
-
-# Reward heads
+llm:
+  model: gpt-4o
+  enabled: true
+  use_reasoned: true
+  periodic: true
+  mode: minutes
+  every_n: 5
 reward_weights:
   pnl: 1.0
   turn: 0.1
   dd: 0.2
   vol: 0.1
-
 reward_tuner:
   enabled: true
   freq_episodes: 50
   delta: 0.05
   bounds:
-    w_pnl: [0.5, 3.0]
-    w_drawdown: [0.0, 2.0]
-    w_volatility: [0.0, 2.0]
-    w_turnover: [0.0, 2.0]
+    w_pnl:
+    - 0.5
+    - 3.0
+    w_drawdown:
+    - 0.0
+    - 2.0
+    w_volatility:
+    - 0.0
+    - 2.0
+    w_turnover:
+    - 0.0
+    - 2.0
   score_weights:
     lambda_dd: 1.0
     kappa_consistency: 0.5
     mu_activity: 0.1
-
-hybrid:
-  enabled: true
-  train_both: true
-
-algo_controller:
-  llm_enabled: false
-
-stage_scheduler:
-  enabled: true
-
-auto:
-  stage_thresholds:
-    delta_score: 0.8
-    td_error: 0.1
-    drawdown: 0.2
-    trade_ratio: 0.5
-    
-# Deterministic policy params
-deterministic_policy:
-  base_threshold: 0.001   # required 5-tick log-return to enter
-  bounce_coef: 0.5        # sensitivity of threshold to prior drawdown
-  trailing_pct: 0.01      # exit when price falls this fraction from peak
-  cooldown_ticks: 5       # min ticks between consecutive trades
-
-# Stochastic policy params
-stochastic_policy:
-  base_threshold: 0.001   # same semantics as deterministic
-  bounce_coef: 0.5
-  trailing_pct: 0.01
-  temperature: 0.1        # softmax temperature tau
-  noise_std: 0.0001       # std-dev of Gaussian noise on thresholds
-  seed: 42
-
-# Paths
 paths:
-  data_root: "data"
-  raw_dir: "data/raw"
-  logs_dir: "logs"
-  reports_dir: "reports"
-  checkpoints_dir: "checkpoints"
-  models_dir: "models"
+  data_root: data
+  raw_dir: data/raw
+  logs_dir: logs
+  reports_dir: reports
+  checkpoints_dir: checkpoints
+  models_dir: models
