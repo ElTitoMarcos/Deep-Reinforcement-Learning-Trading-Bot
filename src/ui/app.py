@@ -705,4 +705,4 @@ placeholder.text("\n".join(st.session_state.get("log_lines", [])))
 
 if not st.session_state["log_paused"]:
     time.sleep(0.5)
-    st.experimental_rerun()
+    st.rerun()
