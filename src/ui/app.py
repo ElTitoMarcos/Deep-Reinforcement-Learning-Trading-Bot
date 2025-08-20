@@ -1,7 +1,7 @@
 import os, io, sys, json, subprocess, time
 from datetime import datetime, UTC
 import streamlit as st
-from src.ui.log_stream import subscribe as log_subscribe
+from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
 
@@ -550,36 +550,19 @@ if st.button("📈 Evaluar"):
     finally:
         st.session_state["busy"] = False
 st.subheader("Actividad en vivo")
-kind_options = [
-    "trades",
-    "riesgo",
-    "datos",
-    "checkpoints",
-    "llm",
-    "metricas",
-    "reward_tuner",
-    "algo_controller",
-    "stage_scheduler",
-    "dqn_stability",
-    "ppo_control",
-]
-selected_kinds = st.multiselect("Tipos", kind_options, default=kind_options, key="log_kind_sel")
-
-if "log_paused" not in st.session_state:
-    st.session_state["log_paused"] = False
-
-if st.button("Pausar" if not st.session_state["log_paused"] else "Reanudar", key="pause_feed"):
-    st.session_state["log_paused"] = not st.session_state["log_paused"]
+stage_scheduler = st.session_state.get("stage_scheduler")
+stage_name = getattr(stage_scheduler, "stage", "data")
+profile = get_auto_profile(stage_name)
 
 placeholder = st.empty()
 if "log_lines" not in st.session_state:
     st.session_state["log_lines"] = []
 
-if "log_iter" not in st.session_state or st.session_state.get("log_iter_kinds") != set(selected_kinds):
-    st.session_state["log_iter_kinds"] = set(selected_kinds)
-    st.session_state["log_iter"] = log_subscribe(kinds=set(selected_kinds))
+if "log_iter" not in st.session_state or st.session_state.get("log_profile") != profile:
+    st.session_state["log_profile"] = profile
+    st.session_state["log_iter"] = log_subscribe(kinds=profile)
 
-if not st.session_state.get("busy") and not st.session_state["log_paused"]:
+if not st.session_state.get("busy"):
     start = time.time()
     gen = st.session_state["log_iter"]
     while time.time() - start < 0.5:
@@ -593,6 +576,6 @@ if not st.session_state.get("busy") and not st.session_state["log_paused"]:
     st.session_state["log_lines"] = st.session_state["log_lines"][-200:]
 placeholder.text("\n".join(st.session_state.get("log_lines", [])))
 
-if not st.session_state.get("busy") and not st.session_state["log_paused"]:
+if not st.session_state.get("busy"):
     time.sleep(0.5)
     st.rerun()
