@@ -1,7 +1,7 @@
 import os, io, sys, json, subprocess, time, uuid, shutil
 from datetime import datetime, UTC
 import streamlit as st
-from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile
+from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile, recent_counts
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
 from src.ui.tasks import run_bg, poll, set_progress
@@ -661,6 +661,9 @@ if st.button("📈 Evaluar"):
 # ---- Registro por áreas ---------------------------------------------------
 
 st.subheader("Registro")
+total_events, kind_counts = recent_counts()
+parts = ", ".join(f"{k} {v}" for k, v in kind_counts.items())
+st.caption(f"Últimos 30s: {total_events} eventos ({parts})")
 
 AREA_KINDS = {
     "Datos": {"datos", "incremental_update", "qc"},

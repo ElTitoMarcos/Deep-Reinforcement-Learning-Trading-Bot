@@ -2,7 +2,7 @@ import logging
 
 from src.reports.human_friendly import episode_sentence
 from src.ui import log_stream
-from src.ui.log_stream import get_auto_profile
+from src.ui.log_stream import get_auto_profile, recent_counts
 
 
 def test_episode_sentence_basic() -> None:
@@ -15,6 +15,7 @@ def test_episode_sentence_basic() -> None:
 
 def test_log_stream_integration() -> None:
     log_stream._LOG_BUFFER.clear()
+    log_stream._KIND_BUFFERS.clear()
     logging.getLogger().setLevel(logging.INFO)
     logging.getLogger().info(
         "",
@@ -42,4 +43,39 @@ def test_get_auto_profile_evaluation() -> None:
 
 def test_get_auto_profile_data() -> None:
     assert get_auto_profile("data") == {"incremental_update", "qc"}
+
+
+def test_per_kind_limit() -> None:
+    log_stream._LOG_BUFFER.clear()
+    log_stream._KIND_BUFFERS.clear()
+    logger = logging.getLogger()
+    for _ in range(250):
+        logger.info("test", extra={"kind": "datos"})
+    assert len(log_stream._KIND_BUFFERS["datos"]) == 200
+    assert sum(1 for e in log_stream._LOG_BUFFER if e["kind"] == "datos") == 200
+
+
+def test_slippage_coalescing() -> None:
+    log_stream._LOG_BUFFER.clear()
+    log_stream._KIND_BUFFERS.clear()
+    logger = logging.getLogger()
+    for i in range(20):
+        logger.info("", extra={"event": "slippage_est", "pct": 0.0003 + i * 0.0001, "usd": 10})
+    events = [e for e in log_stream._LOG_BUFFER if e["kind"] == "datos"]
+    assert len(events) == 1
+    msg = events[0]["message"]
+    assert "slippage_est x20" in msg
+    assert "rango" in msg
+
+
+def test_recent_counts() -> None:
+    log_stream._LOG_BUFFER.clear()
+    log_stream._KIND_BUFFERS.clear()
+    logger = logging.getLogger()
+    logger.info("a", extra={"kind": "trades"})
+    logger.info("b", extra={"kind": "riesgo"})
+    total, counts = recent_counts(30)
+    assert total == 2
+    assert counts["trades"] == 1
+    assert counts["riesgo"] == 1
 
