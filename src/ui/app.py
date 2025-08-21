@@ -123,7 +123,7 @@ else:
     if badge == "CPU (PyTorch sin CUDA)":
         with st.sidebar.expander("¿Cómo habilitar CUDA?"):
             st.markdown(
-                "Instala PyTorch con soporte CUDA, por ejemplo: `pip install torch --index-url https://download.pytorch.org/whl/cu118`"
+                "Instala PyTorch con soporte CUDA, por ejemplo: `pip install torch --index-url https://download.pytorch.org/whl/cu121`"
             )
 
 with st.sidebar:
