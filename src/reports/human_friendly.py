@@ -8,7 +8,7 @@ This module provides two helpers:
 """
 
 from pathlib import Path
-from typing import Mapping, Sequence, Any
+from typing import Mapping, Sequence, Any, Dict
 
 import numpy as np
 
@@ -72,6 +72,29 @@ def write_readme(results: Mapping[str, Any], run_dir: Path) -> None:
         f"- Actividad: {turn:.2f} (cuánto mueve el bot)",
     ]
     (run_dir / "README.md").write_text("\n".join(lines), encoding="utf-8")
+
+
+def kpi_humano(metrics: Mapping[str, Any]) -> Dict[str, float]:
+    """Return key performance indicators with friendly Spanish names."""
+
+    pnl = float(metrics.get("pnl", 0.0))
+    dd = float(metrics.get("dd", metrics.get("max_drawdown", 0.0)))
+    rets: Sequence[float] | None = metrics.get("returns")  # type: ignore[assignment]
+    if rets is not None:
+        arr = np.asarray(rets, dtype=float)
+        consistency = float(arr.mean() / (arr.std(ddof=0) + 1e-12))
+    else:
+        consistency = float(metrics.get("sharpe", 0.0))
+    hit = float(metrics.get("hit", metrics.get("hit_ratio", 0.0)))
+    turn = float(metrics.get("orders", metrics.get("turnover", 0.0)))
+
+    return {
+        "Ganancia total": pnl,
+        "Caída máxima": dd,
+        "Consistencia": consistency,
+        "Acierto": hit,
+        "Actividad": turn,
+    }
 
 
 def render_panel(results: Mapping[str, Any]) -> None:
