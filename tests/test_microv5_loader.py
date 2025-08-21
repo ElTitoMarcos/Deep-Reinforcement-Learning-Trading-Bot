@@ -15,7 +15,6 @@ class DummyEx:
     def fetch_order_book(self, symbol, limit=20):
         return {"bids": [[99, 1]], "asks": [[101, 1]]}
 
-
 def test_collector_step_and_flush(tmp_path, monkeypatch):
     # Avoid lot size lookups
     monkeypatch.setattr(microv5_loader, "fetch_lot_size_meta", lambda ex, sym: (0.0, 0.0, 0.0))
@@ -31,7 +30,6 @@ def test_collector_step_and_flush(tmp_path, monkeypatch):
     assert df.loc[0, "best_ask"] == 101
     assert df.loc[0, "spread"] == 2
     assert df.loc[0, "mid"] == 100
-
 
 def test_collector_validates_market_data(tmp_path, monkeypatch):
     monkeypatch.setattr(microv5_loader, "fetch_lot_size_meta", lambda ex, sym: (0.0, 0.0, 0.0))
