@@ -338,10 +338,10 @@ def train_value_dqn(
     llm_cfg = cfg.get("llm", {})
     llm_client = None
     llm_file = None
-    llm_every = int(llm_cfg.get("every_n") or 0)
-    llm_mode = llm_cfg.get("mode", "episodes")
+    llm_every = int(llm_cfg.get("periodic_value") or 0)
+    llm_mode = llm_cfg.get("periodic_mode", "episodes")
     last_llm_time = time.time()
-    if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
+    if llm_cfg.get("enabled") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)
@@ -706,10 +706,10 @@ def train_dqn(
     llm_cfg = cfg.get("llm", {})
     llm_client = None
     llm_file = None
-    llm_every = int(llm_cfg.get("every_n") or 0)
-    llm_mode = llm_cfg.get("mode", "episodes")
+    llm_every = int(llm_cfg.get("periodic_value") or 0)
+    llm_mode = llm_cfg.get("periodic_mode", "episodes")
     last_llm_time = time.time()
-    if llm_cfg.get("enabled") and llm_cfg.get("periodic") and llm_every > 0:
+    if llm_cfg.get("enabled") and llm_every > 0:
         llm_client = LLMClient(model=llm_cfg.get("model", "gpt-4o"))
         reports_dir = paths.reports_dir()
         reports_dir.mkdir(parents=True, exist_ok=True)

@@ -433,21 +433,37 @@ with st.sidebar:
             st.write("Se usan hiperparámetros sugeridos sin cambios.")
 
     st.header("Asistente LLM")
+    llm_cfg = cfg.get("llm", {})
     llm_model = st.selectbox(
         "Modelo",
         ["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"],
-        index=0,
+        index=["gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini"].index(llm_cfg.get("model", "gpt-4o")),
+        key="llm_model",
     )
-    llm_reason = st.checkbox("Usar LLM para decisiones razonadas")
-    llm_periodic = st.checkbox("Llamadas periódicas durante entrenamiento")
-    llm_mode = "Por episodios"
-    llm_every = 0
+    llm_reason = st.checkbox(
+        "Usar LLM para decisiones razonadas",
+        value=st.session_state.get("llm_reason", llm_cfg.get("enabled", True)),
+        key="llm_reason",
+    )
+    default_val = int(llm_cfg.get("periodic_value") or 0)
+    default_mode = llm_cfg.get("periodic_mode", "episodes")
+    llm_periodic = st.checkbox(
+        "Llamadas periódicas durante entrenamiento",
+        value=st.session_state.get("llm_periodic", default_val > 0),
+        key="llm_periodic",
+    )
+    llm_mode = default_mode
+    llm_every = default_val
     if llm_periodic:
-        llm_mode = st.radio("Modo", ["Por episodios", "Por minutos"], index=0)
+        llm_mode = st.radio(
+            "Modo",
+            ["Por episodios", "Por minutos"],
+            index=0 if default_mode == "episodes" else 1,
+        )
         if llm_mode == "Por episodios":
             llm_every = st.number_input(
                 "Frecuencia de consultas al asistente (en episodios)",
-                value=0,
+                value=default_val if default_mode == "episodes" else 0,
                 min_value=0,
                 step=1,
                 help="Ej.: 50 = pedirá consejo al asistente cada 50 episodios. 0 = desactivado.",
@@ -455,7 +471,7 @@ with st.sidebar:
         else:
             llm_every = st.number_input(
                 "Frecuencia de consultas al asistente (en minutos)",
-                value=0,
+                value=default_val if default_mode == "minutes" else 0,
                 min_value=0,
                 step=1,
                 help="Ej.: 5 = pedirá consejo al asistente cada 5 minutos. 0 = desactivado.",
@@ -464,10 +480,8 @@ with st.sidebar:
     cfg["llm"] = {
         "model": llm_model,
         "enabled": bool(llm_reason or periodic_enabled),
-        "use_reasoned": bool(llm_reason),
-        "periodic": periodic_enabled,
-        "mode": "minutes" if llm_mode == "Por minutos" else "episodes",
-        "every_n": int(llm_every),
+        "periodic_mode": "minutes" if llm_mode == "Por minutos" else "episodes",
+        "periodic_value": int(llm_every) if periodic_enabled else 0,
     }
 
     if st.button("💾 Guardar config YAML"):
