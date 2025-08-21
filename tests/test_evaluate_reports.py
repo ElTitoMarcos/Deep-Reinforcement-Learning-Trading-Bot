@@ -50,9 +50,10 @@ def test_evaluate_creates_report(tmp_path):
     assert '0.005' in res.stdout
 
     reports_dir = paths.REPORTS_DIR
-    runs = list(reports_dir.iterdir())
+    runs = [p for p in reports_dir.iterdir() if p.is_dir()]
     assert len(runs) == 1
     run_dir = runs[0]
+    assert (reports_dir / 'experiments.jsonl').is_file()
     assert (run_dir / 'metrics.json').is_file()
     assert (run_dir / 'trades.csv').is_file()
     assert (run_dir / 'equity.csv').is_file()

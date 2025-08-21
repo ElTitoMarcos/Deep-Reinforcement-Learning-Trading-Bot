@@ -21,6 +21,7 @@ from ..utils import paths
 from ..reports.human_friendly import write_readme
 from ..utils.device import get_device, set_cpu_threads
 from ..data.ensure import ensure_ohlcv
+from ..utils import exp_log
 
 from .metrics import pnl, sharpe, sortino, max_drawdown, hit_ratio, turnover
 import json
@@ -71,6 +72,25 @@ def main():
     else:
         threads = set_cpu_threads()
         print(f"Using device: CPU ({threads} threads)")
+
+    algo_map = cfg.get("algo_weights") or {
+        "dqn": 1.0 if (args.policy.lower() == "hybrid" or args.hybrid) else 0.0,
+        "ppo": 1.0 if (args.policy.lower() == "hybrid" or args.hybrid) else 0.0,
+    }
+    cfg_snapshot = {
+        "algo_map": algo_map,
+        "reward_weights": {
+            "w_pnl": cfg.get("reward_weights", {}).get("pnl"),
+            "w_drawdown": cfg.get("reward_weights", {}).get("dd"),
+            "w_volatility": cfg.get("reward_weights", {}).get("vol"),
+            "w_turnover": cfg.get("reward_weights", {}).get("turn"),
+        },
+        "hparams": {k: cfg.get(k) for k in ("dqn", "ppo") if cfg.get(k)},
+        "data_windows": {},
+        "device": device,
+        "notes_llm": cfg.get("notes_llm", ""),
+    }
+    run_id = exp_log.log_run_start(cfg_snapshot)
 
     def _pk(name: str):
         return {"config": {"device": device}} if name in {"value_based", "dqn", "value", "value-based"} else {}
@@ -184,6 +204,16 @@ def main():
         metrics["signal"] = signal_stats
         metrics["control"] = control_stats
 
+    final_metrics = {
+        "pnl": metrics["pnl"],
+        "dd": metrics["max_drawdown"],
+        "hit": metrics["hit_ratio"],
+        "sharpe_simple": metrics["sharpe"],
+        "turnover": metrics["turnover"],
+    }
+    exp_log.log_run_update(run_id, final_metrics)
+    exp_log.log_run_end(run_id, final_metrics)
+
     print(
         f"Equity final: {equity:.4f}\n"
         f"PnL: {metrics['pnl']:.2%} | Sharpe: {metrics['sharpe']:.3f} | Sortino: {metrics['sortino']:.3f}\n"
@@ -194,8 +224,8 @@ def main():
         print(f"DQN acierta {hits}/{signal_stats['trades']} entradas; PPO reduce DD a {control_stats['max_drawdown']:.2%}")
 
     reports_root = paths.reports_dir()
-    run_id = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
-    run_dir = reports_root / run_id
+    run_stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+    run_dir = reports_root / run_stamp
     run_dir.mkdir(parents=True, exist_ok=True)
 
     # save metrics
