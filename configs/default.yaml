@@ -89,3 +89,12 @@ paths:
   reports_dir: reports
   checkpoints_dir: checkpoints
   models_dir: models
+microstructure_v5:
+  enabled: true
+  orderbook_limit: 20
+  window_seconds: 7200
+  tick_interval_s: 1.0
+  seed_from_klines: true
+  seed_minutes: 120
+  flush_every_n: 60
+  out_dir: data/processed

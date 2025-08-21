@@ -577,6 +577,9 @@ else:
                     break
         st.success("Listo ✔")
 
+if st.session_state.get("data_ready"):
+    st.caption("Microestructura V5 activa")
+
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
 with colt1:
