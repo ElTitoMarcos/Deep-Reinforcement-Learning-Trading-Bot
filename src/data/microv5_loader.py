@@ -36,19 +36,36 @@ from .microv5_features import (
 
 
 def fetch_price_tick(ex: Any, symbol_ccxt: str) -> float:
-    """Return last price using ``ccxt.fetch_ticker`` with REST fallback."""
+    """Return last traded price using ``ccxt`` with a REST fallback.
+
+    Some exchanges occasionally return ticker structures where ``last`` is
+    missing or ``None``.  The helper now guards against this situation and
+    raises if a price cannot be obtained so callers can decide how to handle
+    the failure.  A lightweight REST fallback remains for Binance compatible
+    endpoints.
+    """
 
     try:
         ticker = ex.fetch_ticker(symbol_ccxt)
-        return float(ticker["last"])
+        last = ticker.get("last") or ticker.get("close")
+        if last is None:
+            raise ValueError("ticker missing last price")
+        return float(last)
     except Exception:
         # Simplified REST fallback for Binance compatible exchanges.
         import requests
 
         base = getattr(ex, "urls", {}).get("api", {}).get("public", "https://api.binance.com")
-        r = requests.get(f"{base}/api/v3/ticker/price", params={"symbol": symbol_ccxt.replace("/", "")}, timeout=10)
+        r = requests.get(
+            f"{base}/api/v3/ticker/price",
+            params={"symbol": symbol_ccxt.replace("/", "")},
+            timeout=10,
+        )
         r.raise_for_status()
-        return float(r.json()["price"])
+        price = r.json().get("price")
+        if price is None:
+            raise ValueError("REST ticker missing price")
+        return float(price)
 
 
 def fetch_order_book(ex: Any, symbol_ccxt: str, limit: int = 20) -> Dict[str, Any]:
@@ -131,8 +148,12 @@ class MicroV5Collector:
     def step(self) -> None:
         ts = time.time()
         last = fetch_price_tick(self.ex_public, self.symbol_ccxt)
+        if last is None:
+            raise ValueError("last price unavailable")
         ob = fetch_order_book(self.ex_public, self.symbol_ccxt, self.ob_limit)
         derivs = derivados_basicos(ob)
+        if derivs["best_bid"] is None or derivs["best_ask"] is None:
+            raise ValueError("order book missing top levels")
 
         self.prices.append(last)
         min_price = min(self.prices) if self.prices else last
