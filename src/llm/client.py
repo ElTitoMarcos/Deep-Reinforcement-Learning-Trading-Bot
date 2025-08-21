@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-import os
 import time
 import logging
 from typing import Any
+
+from ..utils.credentials import load_openai_key
 
 
 class LLMClient:
@@ -13,10 +14,10 @@ class LLMClient:
     keeps the interface generic so that future providers could be supported.
     """
 
-    def __init__(self, provider: str = "openai", model: str = "gpt-4o", api_key_env: str = "OPENAI_API_KEY"):
+    def __init__(self, provider: str = "openai", model: str = "gpt-4o"):
         self.provider = provider
         self.model = model
-        self.api_key = os.getenv(api_key_env)
+        self.api_key = None
         self._client: Any | None = None
         self.logger = logging.getLogger(__name__)
 
@@ -25,8 +26,11 @@ class LLMClient:
                 import openai
 
                 self._client = openai
-                if self.api_key:
+                try:
+                    self.api_key = load_openai_key()
                     openai.api_key = self.api_key
+                except Exception:
+                    self.api_key = None
             except Exception:  # pragma: no cover - optional dependency
                 self._client = None
 

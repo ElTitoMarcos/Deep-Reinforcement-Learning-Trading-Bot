@@ -1,4 +1,11 @@
-import os, io, sys, json, subprocess, time, uuid, shutil
+from dotenv import load_dotenv, find_dotenv
+import os
+_DOTENV = find_dotenv(usecwd=True)
+load_dotenv(_DOTENV, override=True)
+if __name__ == "__main__" or os.getenv("DEBUG_DOTENV") == "1":
+    print(f"[.env] Cargado: {_DOTENV or 'NO ENCONTRADO'}")
+
+import io, sys, json, subprocess, time, uuid, shutil
 from datetime import datetime, UTC
 import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile, recent_counts
@@ -15,44 +22,31 @@ from src.data.symbol_discovery import discover_symbols, discover_summary
 from src.data.pipeline import prepare_data
 from src.data import validate_symbols
 from src.exchange.binance_meta import BinanceMeta
-from dotenv import load_dotenv
 from src.auto.strategy_selector import choose_algo
 from src.auto.hparam_tuner import tune
-from src.ui.credentials import (
-    verify_binance_mainnet,
-    verify_binance_testnet,
-    verify_openai,
-)
+from src.utils.credentials import load_binance_creds, load_openai_key
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
 st.set_page_config(page_title="DRL Trading Config", layout="wide")
 
-load_dotenv(".env.local")
-load_dotenv()
-
-if "binance_mainnet_ok" not in st.session_state:
-    api_key = os.getenv("BINANCE_API_KEY")
-    api_secret = os.getenv("BINANCE_API_SECRET")
-    ok = False
-    if api_key and api_secret:
-        ok, _ = verify_binance_mainnet(api_key, api_secret)
-    st.session_state["binance_mainnet_ok"] = ok
-
-if "binance_testnet_ok" not in st.session_state:
-    t_key = os.getenv("BINANCE_TESTNET_API_KEY")
-    t_secret = os.getenv("BINANCE_TESTNET_API_SECRET")
-    ok = False
-    if t_key and t_secret:
-        ok, _ = verify_binance_testnet(t_key, t_secret)
-    st.session_state["binance_testnet_ok"] = ok
+if "binance_mainnet_ok" not in st.session_state or "binance_testnet_ok" not in st.session_state:
+    try:
+        _, _, use_testnet = load_binance_creds()
+        st.session_state["binance_testnet_ok"] = use_testnet
+        st.session_state["binance_mainnet_ok"] = not use_testnet
+    except Exception:
+        st.session_state["binance_mainnet_ok"] = False
+        st.session_state["binance_testnet_ok"] = False
+        st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
 
 if "openai_ok" not in st.session_state:
-    o_key = os.getenv("OPENAI_API_KEY")
-    ok = False
-    if o_key:
-        ok, _ = verify_openai(o_key)
-    st.session_state["openai_ok"] = ok
+    try:
+        load_openai_key()
+        st.session_state["openai_ok"] = True
+    except Exception:
+        st.session_state["openai_ok"] = False
+        st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
 
 st.title("⚙️ Configuración DRL Trading")
 
@@ -124,6 +118,9 @@ with st.sidebar:
     try:
         ex = get_exchange(use_testnet=use_testnet)
         selected_symbols = discover_symbols(ex, top_n=20)
+    except RuntimeError:
+        st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
+        selected_symbols = cfg.get("symbols") or ["BTC/USDT"]
     except Exception as e:
         st.warning(f"Descubrimiento falló: {e}")
         selected_symbols = cfg.get("symbols") or ["BTC/USDT"]
@@ -145,11 +142,9 @@ with st.sidebar:
             st.caption(origin)
 
     if st.button("Actualizar comisiones"):
-        load_dotenv()
-        api_key = os.getenv("BINANCE_API_KEY")
-        api_secret = os.getenv("BINANCE_API_SECRET")
         try:
-            meta = BinanceMeta(api_key, api_secret, use_testnet)
+            key, sec, _ = load_binance_creds()
+            meta = BinanceMeta(key, sec, use_testnet)
             fee_map = meta.get_account_trade_fees()
             if "maker" in fee_map and "taker" in fee_map:
                 entry = fee_map
@@ -162,6 +157,8 @@ with st.sidebar:
             api_fee_maker = entry.get("maker")
             st.session_state["fee_origin"] = meta.last_fee_origin
             st.success(f"Maker {api_fee_maker} | Taker {api_fee_taker}")
+        except RuntimeError:
+            st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
         except Exception as e:
             st.error(f"No se pudo obtener: {e}")
 
@@ -464,6 +461,9 @@ with st.sidebar:
 try:
     ex_val = get_exchange(use_testnet=use_testnet)
     selected_valid, invalid_syms = validate_symbols(ex_val, selected_symbols)
+except RuntimeError:
+    st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
+    selected_valid, invalid_syms = selected_symbols, []
 except Exception as e:
     st.warning(f"No se pudo validar símbolos: {e}")
     selected_valid, invalid_syms = selected_symbols, []

@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from typing import Dict, Any
 import numpy as np
-import os
 import re
+from ..utils.credentials import load_openai_key
 
 # Optional import for LLM assistance
 try:
@@ -113,9 +113,9 @@ class HybridPolicy:
         self.metrics_history.append(metrics)
         target = None
 
-        if openai is not None and os.getenv("OPENAI_API_KEY"):
+        if openai is not None:
             try:  # pragma: no cover - network interaction
-                openai.api_key = os.getenv("OPENAI_API_KEY")
+                openai.api_key = load_openai_key()
                 summary = ", ".join(
                     f"{k}: pnl={v.get('pnl',0):.4f} dd={v.get('max_drawdown',0):.4f}"
                     for k, v in metrics.items()

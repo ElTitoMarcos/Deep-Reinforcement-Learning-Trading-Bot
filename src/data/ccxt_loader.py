@@ -15,6 +15,7 @@ from pathlib import Path
 import pandas as pd
 
 from ..utils import paths
+from ..utils.credentials import load_binance_creds, compute_rate_limit_ms, mask
 
 __all__ = [
     "simulate_1s_from_1m",
@@ -80,15 +81,19 @@ def get_exchange(name: str | None = None, *, use_testnet: bool | None = None):
     if name and name.lower() != "binance":
         raise ValueError("only binance exchange is supported")
 
-    if use_testnet is None:
-        use_testnet = os.getenv("BINANCE_USE_TESTNET", "").lower() in ("1", "true", "yes")
+    key, sec, env_testnet = load_binance_creds()
+    use_testnet = env_testnet if use_testnet is None else use_testnet
 
-    ex = ccxt.binance({"enableRateLimit": True})
-    if use_testnet:  # pragma: no cover - network/ccxt quirks
-        try:
-            ex.set_sandbox_mode(True)
-        except Exception:
-            ex.urls["api"] = ex.urls.get("test", ex.urls.get("api"))
+    ex = ccxt.binance({"apiKey": key, "secret": sec, "enableRateLimit": True})
+    ex.rateLimit = compute_rate_limit_ms()
+
+    if use_testnet:
+        ex.urls["api"]["public"] = "https://testnet.binance.vision/api"
+        ex.urls["api"]["private"] = "https://testnet.binance.vision/api"
+
+    print(
+        f"[binance] Credenciales cargadas (key={mask(key)}), testnet={use_testnet}, rateLimit={ex.rateLimit}ms"
+    )
 
     try:  # pragma: no cover - network/ccxt quirks
         ex.load_markets()

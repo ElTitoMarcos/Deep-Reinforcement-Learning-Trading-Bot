@@ -1,8 +1,8 @@
 exchange: binance
 binance_use_testnet: false
 symbols:
-- ETH/USDT
 - BTC/USDT
+- ETH/USDT
 - SOL/USDT
 - DOGE/USDT
 - XRP/USDT
@@ -77,6 +77,13 @@ reward_tuner:
     lambda_dd: 1.0
     kappa_consistency: 0.5
     mu_activity: 0.1
+hybrid:
+  enabled: true
+  train_both: true
+algo_controller:
+  llm_enabled: false
+stage_scheduler:
+  enabled: true
 paths:
   data_root: data
   raw_dir: data/raw

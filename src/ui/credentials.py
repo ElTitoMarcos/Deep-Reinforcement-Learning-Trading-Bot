@@ -1,4 +1,10 @@
+from dotenv import load_dotenv, find_dotenv, set_key
 import os
+_DOTENV = find_dotenv(usecwd=True)
+load_dotenv(_DOTENV, override=True)
+if __name__ == "__main__" or os.getenv("DEBUG_DOTENV") == "1":
+    print(f"[.env] Cargado: {_DOTENV or 'NO ENCONTRADO'}")
+
 import time
 import hmac
 import hashlib
@@ -7,7 +13,6 @@ from typing import Tuple
 
 import requests
 import streamlit as st
-from dotenv import load_dotenv, set_key
 
 
 BINANCE_MAINNET = "https://api.binance.com"
@@ -78,13 +83,13 @@ def main() -> None:
     load_dotenv(".env.local")
     load_dotenv()
 
-    binance_key = st.text_input("Binance API Key (mainnet)", value=os.getenv("BINANCE_API_KEY", ""))
+    binance_key = st.text_input("Binance API Key (mainnet)", value=os.getenv("BINANCE_API_KEY_MAINNET", ""))
     binance_secret = st.text_input(
-        "Binance API Secret (mainnet)", value=os.getenv("BINANCE_API_SECRET", ""), type="password"
+        "Binance API Secret (mainnet)", value=os.getenv("BINANCE_API_SECRET_MAINNET", ""), type="password"
     )
-    test_key = st.text_input("Binance API Key (testnet)", value=os.getenv("BINANCE_TESTNET_API_KEY", ""))
+    test_key = st.text_input("Binance API Key (testnet)", value=os.getenv("BINANCE_API_KEY_TESTNET", ""))
     test_secret = st.text_input(
-        "Binance API Secret (testnet)", value=os.getenv("BINANCE_TESTNET_API_SECRET", ""), type="password"
+        "Binance API Secret (testnet)", value=os.getenv("BINANCE_API_SECRET_TESTNET", ""), type="password"
     )
     openai_key = st.text_input("OpenAI API Key", value=os.getenv("OPENAI_API_KEY", ""), type="password")
     persist = st.checkbox("Guardar en .env.local", value=False)
@@ -92,10 +97,10 @@ def main() -> None:
 
     if st.button("Guardar y verificar"):
         values = {
-            "BINANCE_API_KEY": binance_key,
-            "BINANCE_API_SECRET": binance_secret,
-            "BINANCE_TESTNET_API_KEY": test_key,
-            "BINANCE_TESTNET_API_SECRET": test_secret,
+            "BINANCE_API_KEY_MAINNET": binance_key,
+            "BINANCE_API_SECRET_MAINNET": binance_secret,
+            "BINANCE_API_KEY_TESTNET": test_key,
+            "BINANCE_API_SECRET_TESTNET": test_secret,
             "OPENAI_API_KEY": openai_key,
         }
         _save_env(values, persist)
