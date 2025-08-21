@@ -1,11 +1,35 @@
 import os
 import multiprocessing
+import time
+import logging
 import torch
 
 
 def get_device() -> str:
-    """Return 'cuda' if a GPU is available, otherwise 'cpu'."""
-    return "cuda" if torch.cuda.is_available() else "cpu"
+    """Return the best available torch device and log its details."""
+    if torch.cuda.is_available():
+        try:
+            name = torch.cuda.get_device_name(0)
+        except Exception:  # pragma: no cover - hardware/driver issues
+            name = "unknown"
+        logging.getLogger(__name__).info("Dispositivo: CUDA (%s)", name)
+        return "cuda"
+    logging.getLogger(__name__).info("Dispositivo: CPU")
+    return "cpu"
+
+
+def sanity_check() -> float:
+    """Run a tiny forward/backward pass and log execution time."""
+    device = get_device()
+    x = torch.randn(8, 8, device=device, requires_grad=True)
+    start = time.time()
+    y = (x * 2).sum()
+    y.backward()
+    if device == "cuda":
+        torch.cuda.synchronize()
+    dt = time.time() - start
+    logging.getLogger(__name__).info("sanity_check %.4fs cuda=%s", dt, device == "cuda")
+    return dt
 
 
 def set_cpu_threads(max_threads: int | None = None) -> int:
