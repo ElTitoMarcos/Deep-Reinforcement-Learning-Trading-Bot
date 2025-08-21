@@ -7,6 +7,13 @@ actual implementation resides in the package so it can also be executed with
 
 from __future__ import annotations
 
+from dotenv import load_dotenv, find_dotenv
+import os
+_DOTENV = find_dotenv(usecwd=True)
+load_dotenv(_DOTENV, override=True)
+if __name__ == "__main__" or os.getenv("DEBUG_DOTENV") == "1":
+    print(f"[.env] Cargado: {_DOTENV or 'NO ENCONTRADO'}")
+
 from src.training.train_drl import main
 
 
