@@ -1,14 +1,15 @@
-from dotenv import load_dotenv, find_dotenv
 import os
-_DOTENV = find_dotenv(usecwd=True)
-load_dotenv(_DOTENV, override=True)
-load_dotenv(".env.local", override=True)
-if __name__ == "__main__" or os.getenv("DEBUG_DOTENV") == "1":
-    print(f"[.env] Cargado: {_DOTENV or 'NO ENCONTRADO'}")
+import streamlit as st
+from dotenv import load_dotenv, find_dotenv
+
+# Cargar .env solo una vez
+if "env_loaded_once" not in st.session_state:
+    load_dotenv(find_dotenv(usecwd=True), override=True)
+    load_dotenv(".env.local", override=True)
+    st.session_state["env_loaded_once"] = True
 
 import io, sys, json, subprocess, time, uuid, shutil
 from datetime import datetime, UTC
-import streamlit as st
 from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile, recent_counts
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
@@ -17,189 +18,72 @@ from src.ui.tasks import run_bg, poll, set_progress
 from src.utils.config import load_config
 from src.utils import paths
 from src.reports.human_friendly import render_panel, to_human
-from src.utils.device import get_device, set_cpu_threads
-from src.data.ccxt_loader import get_exchange
+from src.utils.device import get_device, get_device_badge, set_cpu_threads
 from src.data.symbol_discovery import discover_symbols, discover_summary
 from src.data.pipeline import prepare_data
 from src.data import validate_symbols
-from src.exchange.binance_meta import BinanceMeta
 from src.auto.strategy_selector import choose_algo
 from src.auto.hparam_tuner import tune
 from src.utils.credentials import (
-    load_binance_creds,
-    load_openai_key,
     load_env,
-    mask,
     write_env_local,
-    compute_rate_limit_ms,
 )
-from src.exchange.binance_factory import make_binance_exchange
-from src.exchange.verify import (
-    verify_binance_mainnet,
-    verify_binance_testnet,
-    verify_openai as verify_openai_key,
-)
+from exchange.auto_resolver import resolve_clients
+from exchange.verify import verify_private_mainnet, verify_private_testnet
 
-def _verify_all(data: dict):
-    """Verify all configured credentials."""
-    statuses: dict[str, tuple] = {}
-    use_testnet = data["use_testnet"]
-    rate_limit_ms = data["rate_limit_ms"]
-    if use_testnet:
-        ex = make_binance_exchange(
-            data.get("testnet_key", ""),
-            data.get("testnet_sec", ""),
-            use_testnet=True,
-            rate_limit_ms=rate_limit_ms,
-        )
-        statuses["binance_testnet"] = verify_binance_testnet(ex)
-        statuses["binance_mainnet"] = (False, "No verificado", {})
-    else:
-        ex = make_binance_exchange(
-            data.get("mainnet_key", ""),
-            data.get("mainnet_sec", ""),
-            use_testnet=False,
-            rate_limit_ms=rate_limit_ms,
-        )
-        statuses["binance_mainnet"] = verify_binance_mainnet(ex)
-        statuses["binance_testnet"] = (False, "No verificado", {})
-    statuses["openai"] = verify_openai_key(data.get("openai_key", ""))
-    return statuses
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
 st.set_page_config(page_title="DRL Trading Config", layout="wide")
 
 if "binance_mainnet_ok" not in st.session_state or "binance_testnet_ok" not in st.session_state:
-    try:
-        _, _, use_testnet = load_binance_creds()
-        st.session_state["binance_testnet_ok"] = use_testnet
-        st.session_state["binance_mainnet_ok"] = not use_testnet
-    except Exception:
-        st.session_state["binance_mainnet_ok"] = False
-        st.session_state["binance_testnet_ok"] = False
-        st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
+    cfg_init = load_env()
+    st.session_state["binance_mainnet_ok"] = bool(cfg_init["mainnet_key"] and cfg_init["mainnet_sec"])
+    st.session_state["binance_testnet_ok"] = bool(cfg_init["testnet_key"] and cfg_init["testnet_sec"])
 
 if "openai_ok" not in st.session_state:
-    try:
-        load_openai_key()
-        st.session_state["openai_ok"] = True
-    except Exception:
-        st.session_state["openai_ok"] = False
-        st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
+    cfg_init = load_env()
+    st.session_state["openai_ok"] = bool(cfg_init["openai_key"])
 
-st.header("🔐 Conexiones")
 
-env_cfg = load_env()
-use_testnet_flag = st.checkbox("Usar testnet", value=env_cfg["use_testnet"], key="use_testnet_toggle")
+st.header("Conexiones")
+cfg = load_env()
 
-col1, col2 = st.columns([4, 1])
-with col1:
-    mainnet_key = st.text_input(
-        "Binance API Key (mainnet)", value=env_cfg["mainnet_key"] or "", key="mainnet_key"
-    )
-with col2:
-    if env_cfg["mainnet_key"]:
-        st.caption(mask(env_cfg["mainnet_key"]))
+mn_key = st.text_input("Binance MAINNET API Key", value=cfg["mainnet_key"] or "", type="password", help="Se usa solo para endpoints privados como tarifas de cuenta.")
+mn_sec = st.text_input("Binance MAINNET API Secret", value=cfg["mainnet_sec"] or "", type="password")
+tn_key = st.text_input("Binance TESTNET API Key", value=cfg["testnet_key"] or "", type="password")
+tn_sec = st.text_input("Binance TESTNET API Secret", value=cfg["testnet_sec"] or "", type="password")
+oa_key = st.text_input("OpenAI API Key", value=cfg["openai_key"] or "", type="password")
 
-col1, col2 = st.columns([4, 1])
-with col1:
-    mainnet_sec = st.text_input(
-        "Binance API Secret (mainnet)",
-        value=env_cfg["mainnet_sec"] or "",
-        type="password",
-        key="mainnet_sec",
-    )
-with col2:
-    if env_cfg["mainnet_sec"]:
-        st.caption(mask(env_cfg["mainnet_sec"]))
-
-col1, col2 = st.columns([4, 1])
-with col1:
-    testnet_key = st.text_input(
-        "Binance API Key (testnet)", value=env_cfg["testnet_key"] or "", key="testnet_key"
-    )
-with col2:
-    if env_cfg["testnet_key"]:
-        st.caption(mask(env_cfg["testnet_key"]))
-
-col1, col2 = st.columns([4, 1])
-with col1:
-    testnet_sec = st.text_input(
-        "Binance API Secret (testnet)",
-        value=env_cfg["testnet_sec"] or "",
-        type="password",
-        key="testnet_sec",
-    )
-with col2:
-    if env_cfg["testnet_sec"]:
-        st.caption(mask(env_cfg["testnet_sec"]))
-
-col1, col2 = st.columns([4, 1])
-with col1:
-    openai_key = st.text_input(
-        "OpenAI API Key", value=env_cfg["openai_key"] or "", type="password", key="openai_key"
-    )
-with col2:
-    if env_cfg["openai_key"]:
-        st.caption(mask(env_cfg["openai_key"]))
-
-if st.button("Guardar y verificar", key="verify_btn"):
-    updates = {
-        "BINANCE_USE_TESTNET": "true" if use_testnet_flag else "false",
-        "BINANCE_API_KEY_MAINNET": mainnet_key,
-        "BINANCE_API_SECRET_MAINNET": mainnet_sec,
-        "BINANCE_API_KEY_TESTNET": testnet_key,
-        "BINANCE_API_SECRET_TESTNET": testnet_sec,
-        "OPENAI_API_KEY": openai_key,
-    }
-    write_env_local(updates)
+if st.button("Guardar y verificar"):
+    write_env_local({
+        "BINANCE_API_KEY_MAINNET": mn_key,
+        "BINANCE_API_SECRET_MAINNET": mn_sec,
+        "BINANCE_API_KEY_TESTNET": tn_key,
+        "BINANCE_API_SECRET_TESTNET": tn_sec,
+        "OPENAI_API_KEY": oa_key,
+    })
     load_dotenv(".env.local", override=True)
-    data = {
-        "use_testnet": use_testnet_flag,
-        "mainnet_key": mainnet_key,
-        "mainnet_sec": mainnet_sec,
-        "testnet_key": testnet_key,
-        "testnet_sec": testnet_sec,
-        "openai_key": openai_key,
-        "rate_limit_ms": compute_rate_limit_ms(),
-    }
-    jid = run_bg("verify-creds", _verify_all, data)
-    st.session_state["verify_job"] = jid
-    st.experimental_rerun()
 
-job_id = st.session_state.get("verify_job")
-if job_id:
-    info = poll(job_id)
-    if info["state"] == "running":
-        st.info(info.get("progress", "Verificando..."))
-        time.sleep(0.5)
-        st.experimental_rerun()
-    elif info["state"] == "done":
-        res = info["result"]
-        msgs = st.session_state.setdefault("conn_msgs", {})
-        ok_main, msg_main, extra_main = res.get("binance_mainnet", (False, "", {}))
-        ok_test, msg_test, _ = res.get("binance_testnet", (False, "", {}))
-        ok_oai, msg_oai, _ = res.get("openai", (False, "", {}))
-        st.session_state["binance_mainnet_ok"] = ok_main
-        st.session_state["binance_testnet_ok"] = ok_test
-        st.session_state["openai_ok"] = ok_oai
-        msgs["binance_mainnet"] = msg_main
-        msgs["binance_testnet"] = msg_test
-        msgs["openai"] = msg_oai
+    clients = resolve_clients()
+    ok_main, msg_main, extra_main = (False, "Sin claves", {})
+    if clients["private_mainnet"]:
+        ok_main, msg_main, extra_main = verify_private_mainnet(clients["private_mainnet"])
         if ok_main and extra_main.get("canTrade") is False:
-            st.warning(
-                "Esta clave parece no tener permisos de spot; crea una nueva clave con permisos de trading spot y sin restricciones de IP (o añade tu IP actual)."
-            )
-        st.session_state["connections_ok"] = all([
-            st.session_state.get("binance_mainnet_ok", False),
-            st.session_state.get("binance_testnet_ok", False),
-            st.session_state.get("openai_ok", False),
-        ])
-        del st.session_state["verify_job"]
-    else:
-        st.error(info.get("error"))
-        del st.session_state["verify_job"]
+            st.warning("Esta clave parece no tener permisos de spot; revisa en Binance.")
+    ok_test, msg_test, _ = (False, "Sin claves", {})
+    if clients["private_testnet"]:
+        ok_test, msg_test, _ = verify_private_testnet(clients["private_testnet"])
+
+    st.session_state["binance_mainnet_ok"] = ok_main
+    st.session_state["binance_testnet_ok"] = ok_test
+    st.session_state["openai_ok"] = bool(oa_key.strip())
+    st.session_state["conn_msgs"] = {
+        "binance_mainnet": msg_main,
+        "binance_testnet": msg_test,
+        "openai": "" if st.session_state["openai_ok"] else "Falta clave",
+    }
+    st.rerun()
 
 def _badge(label: str, ok: bool) -> str:
     color = "green" if ok else "red"
@@ -208,15 +92,16 @@ def _badge(label: str, ok: bool) -> str:
 
 msgs = st.session_state.get("conn_msgs", {})
 st.markdown(_badge("Binance mainnet", st.session_state.get("binance_mainnet_ok", False)))
-if not st.session_state.get("binance_mainnet_ok", False) and msgs.get("binance_mainnet"):
+if msgs.get("binance_mainnet"):
     st.caption(msgs["binance_mainnet"])
 st.markdown(_badge("Binance testnet", st.session_state.get("binance_testnet_ok", False)))
-if not st.session_state.get("binance_testnet_ok", False) and msgs.get("binance_testnet"):
+if msgs.get("binance_testnet"):
     st.caption(msgs["binance_testnet"])
 st.markdown(_badge("OpenAI", st.session_state.get("openai_ok", False)))
-if not st.session_state.get("openai_ok", False) and msgs.get("openai"):
+if msgs.get("openai") and not st.session_state.get("openai_ok", False):
     st.caption(msgs["openai"])
 
+st.write("La app elige automáticamente la red: MAINNET para datos de mercado; TESTNET solo para pruebas con órdenes (no usadas en entrenamiento). Las llamadas privadas (fees) intentan MAINNET si hay claves; si fallan, se aplica fallback.")
 st.divider()
 
 st.title("⚙️ Configuración DRL Trading")
@@ -229,23 +114,17 @@ if "busy" not in st.session_state:
     st.session_state["busy"] = False
 
 device = get_device()
+badge = get_device_badge()
 if device == "cuda":
-    import torch
-
-    name = torch.cuda.get_device_name(0)
-    st.sidebar.success(f"Dispositivo: CUDA ({name})")
+    st.sidebar.success(f"Dispositivo: {badge}")
 else:
     threads = set_cpu_threads()
-    st.sidebar.info(f"Dispositivo: CPU ({threads} hilos)")
-    if shutil.which("nvidia-smi"):
-        try:
-            res = subprocess.run(["nvidia-smi"], capture_output=True)
-            if res.returncode == 0:
-                st.sidebar.warning(
-                    "Se detectó GPU pero PyTorch no tiene soporte CUDA; considera reinstalarlo con CUDA."
-                )
-        except Exception:
-            pass
+    st.sidebar.info(f"Dispositivo: {badge} ({threads} hilos)")
+    if badge == "CPU (PyTorch sin CUDA)":
+        with st.sidebar.expander("¿Cómo habilitar CUDA?"):
+            st.markdown(
+                "Instala PyTorch con soporte CUDA, por ejemplo: `pip install torch --index-url https://download.pytorch.org/whl/cu118`"
+            )
 
 with st.sidebar:
     st.header("Conexiones")
@@ -278,12 +157,9 @@ with st.sidebar:
 
     paths_cfg = cfg.get("paths", {})
     raw_dir = paths.RAW_DIR
-    use_testnet_default = bool(cfg.get("binance_use_testnet", False))
-    mode = st.radio("Modo", ["Mainnet", "Testnet"], index=1 if use_testnet_default else 0)
-    use_testnet = mode == "Testnet"
-    os.environ["BINANCE_USE_TESTNET"] = "true" if use_testnet else "false"
+    clients = resolve_clients()
+    ex = clients["public_mainnet"]
     try:
-        ex = get_exchange(use_testnet=use_testnet)
         selected_symbols = discover_symbols(ex, top_n=20)
     except RuntimeError:
         st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
@@ -309,25 +185,23 @@ with st.sidebar:
             st.caption(origin)
 
     if st.button("Actualizar comisiones"):
+        clients = resolve_clients()
+        ex_fee = clients["private_mainnet"]
         try:
-            key, sec, _ = load_binance_creds()
-            meta = BinanceMeta(key, sec, use_testnet)
-            fee_map = meta.get_account_trade_fees()
-            if "maker" in fee_map and "taker" in fee_map:
-                entry = fee_map
+            if ex_fee:
+                fee_map = ex_fee.sapi_get_asset_tradefee()
+                entry = fee_map[0] if isinstance(fee_map, list) else fee_map
+                api_fee_taker = float(entry.get("takerCommission", default_fee_taker))
+                api_fee_maker = float(entry.get("makerCommission", default_fee_taker))
+                st.session_state["fee_origin"] = "Fuente: API mainnet"
+                st.success(f"Maker {api_fee_maker} | Taker {api_fee_taker}")
             else:
-                symbol_key = (
-                    selected_symbols[0].replace("/", "") if selected_symbols else next(iter(fee_map))
-                )
-                entry = fee_map.get(symbol_key) or next(iter(fee_map.values()))
-            api_fee_taker = entry.get("taker")
-            api_fee_maker = entry.get("maker")
-            st.session_state["fee_origin"] = meta.last_fee_origin
-            st.success(f"Maker {api_fee_maker} | Taker {api_fee_taker}")
-        except RuntimeError:
-            st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
-        except Exception as e:
-            st.error(f"No se pudo obtener: {e}")
+                raise Exception("Sin claves")
+        except Exception:
+            api_fee_taker = default_fee_taker
+            api_fee_maker = default_fee_taker
+            st.session_state["fee_origin"] = "Fuente: fallback"
+            st.info("Tarifa por defecto aplicada")
 
     fee_taker = api_fee_taker or st.session_state["fee_taker"] or default_fee_taker
     fee_maker = api_fee_maker or st.session_state["fee_maker"] or fee_taker
@@ -598,10 +472,10 @@ with st.sidebar:
 
     if st.button("💾 Guardar config YAML"):
         import yaml
-        new_cfg = {
-            "exchange": "binance",
-            "binance_use_testnet": use_testnet,
-            "symbols": selected_symbols,
+            new_cfg = {
+                "exchange": "binance",
+                "binance_use_testnet": False,
+                "symbols": selected_symbols,
             "timeframe": cfg.get("timeframe", "1m"),
             "fees": {"taker": fee_taker, "maker": fee_maker},
             "slippage_multiplier": slippage_mult,
@@ -626,7 +500,7 @@ with st.sidebar:
         st.success(f"Guardado {CONFIG_PATH}")
 
 try:
-    ex_val = get_exchange(use_testnet=use_testnet)
+    ex_val = clients["public_mainnet"]
     selected_valid, invalid_syms = validate_symbols(ex_val, selected_symbols)
 except RuntimeError:
     st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
