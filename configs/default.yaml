@@ -45,12 +45,10 @@ dqn:
   epsilon_end: 0.05
   epsilon_decay_steps: 10000
 llm:
-  model: gpt-4o
   enabled: true
-  use_reasoned: true
-  periodic: true
-  mode: minutes
-  every_n: 5
+  model: gpt-4o
+  periodic_mode: episodes
+  periodic_value: 50
 reward_weights:
   pnl: 1.0
   turn: 0.1
