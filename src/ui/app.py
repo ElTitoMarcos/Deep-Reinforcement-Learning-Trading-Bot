@@ -472,10 +472,11 @@ with st.sidebar:
 
     if st.button("💾 Guardar config YAML"):
         import yaml
-            new_cfg = {
-                "exchange": "binance",
-                "binance_use_testnet": False,
-                "symbols": selected_symbols,
+
+        new_cfg = {
+            "exchange": "binance",
+            "binance_use_testnet": False,
+            "symbols": selected_symbols,
             "timeframe": cfg.get("timeframe", "1m"),
             "fees": {"taker": fee_taker, "maker": fee_maker},
             "slippage_multiplier": slippage_mult,
@@ -754,6 +755,3 @@ for tab, (area, kinds) in zip(tabs, AREA_KINDS.items()):
             path.write_text("\n".join(md_lines), encoding="utf-8")
             st.success(f"Guardado en {path}")
 
-if not st.session_state.get("busy"):
-    time.sleep(0.5)
-    st.rerun()
