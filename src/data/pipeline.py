@@ -9,6 +9,7 @@ from .quality import validate_metadata, validate_ohlcv
 from .ensure import ensure_ohlcv
 from .incremental import update_all
 from .refresh_worker import start_refresh_worker
+from .microv5_loader import MicroV5Collector
 
 
 def prepare_data(
@@ -43,7 +44,20 @@ def prepare_data(
     report("Actualizando…")
     update_all(symbols, timeframe)
 
+    # Start microstructure collectors (light weight seed)
+    collectors: List[MicroV5Collector] = []
+    for sym in symbols:
+        try:
+            col = MicroV5Collector(ex, sym, win_secs=120)
+            # Grab a single snapshot so the UI can report something immediately
+            col.step()
+            collectors.append(col)
+        except Exception:
+            # Non critical; network errors are ignored at this stage
+            continue
+
     if auto_refresh:
         start_refresh_worker(symbols, timeframe, every=refresh_every_min)
         report("Refresco en marcha ✔")
+    report("Microestructura V5 activa")
     return symbols
