@@ -149,8 +149,9 @@ def recent_counts(window_secs: int = 30) -> Tuple[int, Dict[str, int]]:
     cutoff = datetime.now(UTC) - timedelta(seconds=window_secs)
     total = 0
     counts: Dict[str, int] = defaultdict(int)
-    for item in list(_LOG_BUFFER):
-        if item["time"] >= cutoff:
-            total += 1
-            counts[item["kind"]] += 1
+    for item in reversed(_LOG_BUFFER):
+        if item["time"] < cutoff:
+            break
+        total += 1
+        counts[item["kind"]] += 1
     return total, dict(counts)
