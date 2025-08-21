@@ -91,8 +91,11 @@ def get_exchange(name: str | None = None, *, use_testnet: bool | None = None):
         ex.urls["api"]["public"] = "https://testnet.binance.vision/api"
         ex.urls["api"]["private"] = "https://testnet.binance.vision/api"
 
-    print(
-        f"[binance] Credenciales cargadas (key={mask(key)}), testnet={use_testnet}, rateLimit={ex.rateLimit}ms"
+    logger.info(
+        "[binance] Credenciales cargadas (key=%s), testnet=%s, rateLimit=%sms",
+        mask(key),
+        use_testnet,
+        ex.rateLimit,
     )
 
     try:  # pragma: no cover - network/ccxt quirks
