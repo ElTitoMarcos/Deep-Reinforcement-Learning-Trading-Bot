@@ -26,6 +26,9 @@ def prepare_data(
 ) -> List[str]:
     """Run the full data preparation pipeline and return discovered symbols."""
 
+    if not logging.getLogger().hasHandlers():
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     def report(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)

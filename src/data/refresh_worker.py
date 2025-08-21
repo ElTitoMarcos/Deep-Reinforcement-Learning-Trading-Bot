@@ -4,6 +4,7 @@ import json
 import threading
 from datetime import UTC, datetime, timedelta
 from typing import Iterable
+import logging
 
 from .ccxt_loader import get_exchange
 from .incremental import fetch_ohlcv_incremental, last_watermark, upsert_parquet
@@ -15,6 +16,8 @@ from ..utils import paths
 dataset_updated = threading.Event()
 _stop_event = threading.Event()
 _thread: threading.Thread | None = None
+
+logger = logging.getLogger(__name__)
 
 
 def _parse_interval(timeframe_min: str) -> float:
@@ -28,12 +31,13 @@ def _parse_interval(timeframe_min: str) -> float:
 def _run(symbols: Iterable[str], timeframe: str, interval_min: float) -> None:
     ex = get_exchange()
     while not _stop_event.is_set():
-        updated = False
+        total = 0
         for sym in symbols:
             try:
                 since = last_watermark(sym, timeframe)
                 if since is None:
                     since = int((datetime.now(UTC) - timedelta(days=30)).timestamp() * 1000)
+                logger.info("refresh symbol=%s since=%s", sym, since)
                 df_new = fetch_ohlcv_incremental(ex, sym, timeframe, since_ms=since)
                 if df_new.empty:
                     continue
@@ -49,11 +53,12 @@ def _run(symbols: Iterable[str], timeframe: str, interval_min: float) -> None:
                 }
                 with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
                     json.dump(manifest, f, indent=2)
-                print(f"Dataset actualizado +{len(df_new)} velas")
-                updated = True
+                total += len(df_new)
             except Exception:
+                logger.exception("error_refreshing symbol=%s", sym)
                 continue
-        if updated:
+        if total > 0:
+            logger.info("Dataset actualizado +%d velas", total)
             dataset_updated.set()
         # wait but allow stop_event to break early
         _stop_event.wait(interval_min * 60)
