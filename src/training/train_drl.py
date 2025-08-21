@@ -53,6 +53,7 @@ from ..utils.data_io import load_table, resample_to
 from ..utils.logging import ensure_logger, config_hash
 from ..utils import paths
 from ..utils.device import get_device, set_cpu_threads
+from ..utils import exp_log
 from ..policies.value_based import ValueBasedPolicy
 from ..llm import LLMClient, SYSTEM_PROMPT, build_periodic_prompt
 from ..data.refresh_worker import start_refresh_worker, stop_refresh_worker, dataset_updated
@@ -1082,6 +1083,29 @@ def main() -> None:
         cfg["dqn"] = params
         logger.log("INFO", "hparams", algo="dqn", params=params)
 
+    # experiment logging - start
+    algo_map = cfg.get("algo_weights") or {
+        "dqn": 1.0 if algo_key in {"dqn", "hybrid"} else 0.0,
+        "ppo": 1.0 if algo_key in {"ppo", "hybrid"} else 0.0,
+    }
+    cfg_snapshot = {
+        "algo_map": algo_map,
+        "reward_weights": {
+            "w_pnl": getattr(env, "w_pnl", None),
+            "w_drawdown": getattr(env, "w_dd", None),
+            "w_volatility": getattr(env, "w_vol", None),
+            "w_turnover": getattr(env, "w_turn", None),
+        },
+        "hparams": {k: cfg.get(k) for k in ("dqn", "ppo") if cfg.get(k)},
+        "data_windows": {
+            "trade_window_seconds": getattr(env, "trade_window_seconds", None),
+            "max_trades_per_window": getattr(env, "max_trades_per_window", None),
+        },
+        "device": device,
+        "notes_llm": cfg.get("notes_llm", ""),
+    }
+    run_id = exp_log.log_run_start(cfg_snapshot)
+
     ckpt_dir = paths.checkpoints_dir()
     if algo_key == "dqn":
         if not has_sb3():  # pragma: no cover - optional dependency
@@ -1126,6 +1150,16 @@ def main() -> None:
 
     logger.log("INFO", "training_done", algo=algo_key, artifact=out)
     print(f"Saved model/checkpoint to: {out}")
+
+    final_metrics = {
+        "pnl": getattr(env, "equity", 0.0),
+        "dd": getattr(env, "equity_peak", 0.0) - getattr(env, "equity", 0.0),
+        "hit": 0.0,
+        "sharpe_simple": 0.0,
+        "turnover": 0.0,
+    }
+    exp_log.log_run_update(run_id, final_metrics)
+    exp_log.log_run_end(run_id, final_metrics)
 
 
 if __name__ == "__main__":  # pragma: no cover
