@@ -2,6 +2,7 @@ from dotenv import load_dotenv, find_dotenv
 import os
 _DOTENV = find_dotenv(usecwd=True)
 load_dotenv(_DOTENV, override=True)
+load_dotenv(".env.local", override=True)
 if __name__ == "__main__" or os.getenv("DEBUG_DOTENV") == "1":
     print(f"[.env] Cargado: {_DOTENV or 'NO ENCONTRADO'}")
 
@@ -24,7 +25,46 @@ from src.data import validate_symbols
 from src.exchange.binance_meta import BinanceMeta
 from src.auto.strategy_selector import choose_algo
 from src.auto.hparam_tuner import tune
-from src.utils.credentials import load_binance_creds, load_openai_key
+from src.utils.credentials import (
+    load_binance_creds,
+    load_openai_key,
+    load_env,
+    mask,
+    write_env_local,
+    compute_rate_limit_ms,
+)
+from src.exchange.binance_factory import make_binance_exchange
+from src.exchange.verify import (
+    verify_binance_mainnet,
+    verify_binance_testnet,
+    verify_openai as verify_openai_key,
+)
+
+def _verify_all(data: dict):
+    """Verify all configured credentials."""
+    statuses: dict[str, tuple] = {}
+    use_testnet = data["use_testnet"]
+    rate_limit_ms = data["rate_limit_ms"]
+    if use_testnet:
+        ex = make_binance_exchange(
+            data.get("testnet_key", ""),
+            data.get("testnet_sec", ""),
+            use_testnet=True,
+            rate_limit_ms=rate_limit_ms,
+        )
+        statuses["binance_testnet"] = verify_binance_testnet(ex)
+        statuses["binance_mainnet"] = (False, "No verificado", {})
+    else:
+        ex = make_binance_exchange(
+            data.get("mainnet_key", ""),
+            data.get("mainnet_sec", ""),
+            use_testnet=False,
+            rate_limit_ms=rate_limit_ms,
+        )
+        statuses["binance_mainnet"] = verify_binance_mainnet(ex)
+        statuses["binance_testnet"] = (False, "No verificado", {})
+    statuses["openai"] = verify_openai_key(data.get("openai_key", ""))
+    return statuses
 
 CONFIG_PATH = st.session_state.get("config_path", "configs/default.yaml")
 
@@ -47,6 +87,137 @@ if "openai_ok" not in st.session_state:
     except Exception:
         st.session_state["openai_ok"] = False
         st.error("Faltan claves en .env; abre el panel de Conexiones para configurarlas")
+
+st.header("🔐 Conexiones")
+
+env_cfg = load_env()
+use_testnet_flag = st.checkbox("Usar testnet", value=env_cfg["use_testnet"], key="use_testnet_toggle")
+
+col1, col2 = st.columns([4, 1])
+with col1:
+    mainnet_key = st.text_input(
+        "Binance API Key (mainnet)", value=env_cfg["mainnet_key"] or "", key="mainnet_key"
+    )
+with col2:
+    if env_cfg["mainnet_key"]:
+        st.caption(mask(env_cfg["mainnet_key"]))
+
+col1, col2 = st.columns([4, 1])
+with col1:
+    mainnet_sec = st.text_input(
+        "Binance API Secret (mainnet)",
+        value=env_cfg["mainnet_sec"] or "",
+        type="password",
+        key="mainnet_sec",
+    )
+with col2:
+    if env_cfg["mainnet_sec"]:
+        st.caption(mask(env_cfg["mainnet_sec"]))
+
+col1, col2 = st.columns([4, 1])
+with col1:
+    testnet_key = st.text_input(
+        "Binance API Key (testnet)", value=env_cfg["testnet_key"] or "", key="testnet_key"
+    )
+with col2:
+    if env_cfg["testnet_key"]:
+        st.caption(mask(env_cfg["testnet_key"]))
+
+col1, col2 = st.columns([4, 1])
+with col1:
+    testnet_sec = st.text_input(
+        "Binance API Secret (testnet)",
+        value=env_cfg["testnet_sec"] or "",
+        type="password",
+        key="testnet_sec",
+    )
+with col2:
+    if env_cfg["testnet_sec"]:
+        st.caption(mask(env_cfg["testnet_sec"]))
+
+col1, col2 = st.columns([4, 1])
+with col1:
+    openai_key = st.text_input(
+        "OpenAI API Key", value=env_cfg["openai_key"] or "", type="password", key="openai_key"
+    )
+with col2:
+    if env_cfg["openai_key"]:
+        st.caption(mask(env_cfg["openai_key"]))
+
+if st.button("Guardar y verificar", key="verify_btn"):
+    updates = {
+        "BINANCE_USE_TESTNET": "true" if use_testnet_flag else "false",
+        "BINANCE_API_KEY_MAINNET": mainnet_key,
+        "BINANCE_API_SECRET_MAINNET": mainnet_sec,
+        "BINANCE_API_KEY_TESTNET": testnet_key,
+        "BINANCE_API_SECRET_TESTNET": testnet_sec,
+        "OPENAI_API_KEY": openai_key,
+    }
+    write_env_local(updates)
+    load_dotenv(".env.local", override=True)
+    data = {
+        "use_testnet": use_testnet_flag,
+        "mainnet_key": mainnet_key,
+        "mainnet_sec": mainnet_sec,
+        "testnet_key": testnet_key,
+        "testnet_sec": testnet_sec,
+        "openai_key": openai_key,
+        "rate_limit_ms": compute_rate_limit_ms(),
+    }
+    jid = run_bg("verify-creds", _verify_all, data)
+    st.session_state["verify_job"] = jid
+    st.experimental_rerun()
+
+job_id = st.session_state.get("verify_job")
+if job_id:
+    info = poll(job_id)
+    if info["state"] == "running":
+        st.info(info.get("progress", "Verificando..."))
+        time.sleep(0.5)
+        st.experimental_rerun()
+    elif info["state"] == "done":
+        res = info["result"]
+        msgs = st.session_state.setdefault("conn_msgs", {})
+        ok_main, msg_main, extra_main = res.get("binance_mainnet", (False, "", {}))
+        ok_test, msg_test, _ = res.get("binance_testnet", (False, "", {}))
+        ok_oai, msg_oai, _ = res.get("openai", (False, "", {}))
+        st.session_state["binance_mainnet_ok"] = ok_main
+        st.session_state["binance_testnet_ok"] = ok_test
+        st.session_state["openai_ok"] = ok_oai
+        msgs["binance_mainnet"] = msg_main
+        msgs["binance_testnet"] = msg_test
+        msgs["openai"] = msg_oai
+        if ok_main and extra_main.get("canTrade") is False:
+            st.warning(
+                "Esta clave parece no tener permisos de spot; crea una nueva clave con permisos de trading spot y sin restricciones de IP (o añade tu IP actual)."
+            )
+        st.session_state["connections_ok"] = all([
+            st.session_state.get("binance_mainnet_ok", False),
+            st.session_state.get("binance_testnet_ok", False),
+            st.session_state.get("openai_ok", False),
+        ])
+        del st.session_state["verify_job"]
+    else:
+        st.error(info.get("error"))
+        del st.session_state["verify_job"]
+
+def _badge(label: str, ok: bool) -> str:
+    color = "green" if ok else "red"
+    text = "Conectado" if ok else "No conectado"
+    return f"{label}: :{color}[{text}]"
+
+msgs = st.session_state.get("conn_msgs", {})
+st.markdown(_badge("Binance mainnet", st.session_state.get("binance_mainnet_ok", False)))
+if not st.session_state.get("binance_mainnet_ok", False) and msgs.get("binance_mainnet"):
+    st.caption(msgs["binance_mainnet"])
+st.markdown(_badge("Binance testnet", st.session_state.get("binance_testnet_ok", False)))
+if not st.session_state.get("binance_testnet_ok", False) and msgs.get("binance_testnet"):
+    st.caption(msgs["binance_testnet"])
+st.markdown(_badge("OpenAI", st.session_state.get("openai_ok", False)))
+if not st.session_state.get("openai_ok", False) and msgs.get("openai"):
+    st.caption(msgs["openai"])
+
+st.divider()
 
 st.title("⚙️ Configuración DRL Trading")
 
@@ -90,10 +261,6 @@ with st.sidebar:
         and st.session_state.get("openai_ok")
     ):
         st.warning("Faltan claves o verificación falló")
-        try:
-            st.page_link("src/ui/credentials.py", label="Configurar conexiones")
-        except Exception:
-            st.markdown("[Configurar conexiones](./credentials)")
 
     st.header("Ajustes globales")
     CONFIG_PATH = st.text_input("Ruta config YAML", value=CONFIG_PATH, key="cfg_path", help="Normalmente configs/default.yaml")

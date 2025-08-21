@@ -61,7 +61,9 @@ class BinanceMeta:
             resp = requests.get(base + endpoint, params=params, headers=headers, timeout=10)
             if self.use_testnet and getattr(resp, "status_code", None) == 404:
                 fees = {"SPOT": {"taker": default_fee, "maker": default_fee}}
-                self.last_fee_origin = "Fuente: Fallback testnet"
+                self.last_fee_origin = (
+                    f"Fuente: fallback testnet ({default_bps:.0f} bps = {default_fee:.3f})"
+                )
                 logger.info(
                     "[binance_meta] Testnet sin endpoint tradeFee → usando fallback %s bps (%.4f)",
                     default_bps,
@@ -82,7 +84,9 @@ class BinanceMeta:
                 return fees
         except Exception as exc:  # pragma: no cover - network or auth issues
             if self.use_testnet:
-                self.last_fee_origin = "Fuente: Fallback testnet"
+                self.last_fee_origin = (
+                    f"Fuente: fallback testnet ({default_bps:.0f} bps = {default_fee:.3f})"
+                )
                 logger.info(
                     "[binance_meta] testnet tradeFee fallo (%s); usando fallback %s bps (%.4f)",
                     exc,
@@ -90,12 +94,8 @@ class BinanceMeta:
                     default_fee,
                 )
             else:
-                self.last_fee_origin = "Fuente: Fallback"
-                logger.warning(
-                    "[binance_meta] tradeFee API fallo: %s; usando fallback %s bps (%.4f)",
-                    exc,
-                    default_bps,
-                    default_fee,
+                self.last_fee_origin = (
+                    f"Fuente: fallback ({default_bps:.0f} bps = {default_fee:.3f})"
                 )
             return {"SPOT": {"maker": default_fee, "taker": default_fee}}
 
