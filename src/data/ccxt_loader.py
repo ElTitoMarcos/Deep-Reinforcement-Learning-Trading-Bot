@@ -81,7 +81,17 @@ def get_exchange(name: str | None = None, *, use_testnet: bool | None = None):
     if name and name.lower() != "binance":
         raise ValueError("only binance exchange is supported")
 
-    key, sec, env_testnet = load_binance_creds()
+    try:
+        key, sec, env_testnet = load_binance_creds()
+    except RuntimeError:
+        # Cuando no hay credenciales configuradas permitimos continuar con
+        # acceso solo a endpoints públicos.  Esto permite preparar datos
+        # básicos sin necesidad de claves de API.
+        key = ""
+        sec = ""
+        env_testnet = False
+        logger.warning("Credenciales Binance no configuradas; usando acceso público")
+
     use_testnet = env_testnet if use_testnet is None else use_testnet
 
     ex = ccxt.binance({"apiKey": key, "secret": sec, "enableRateLimit": True})
