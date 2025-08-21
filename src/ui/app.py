@@ -8,19 +8,19 @@ if "env_loaded_once" not in st.session_state:
     load_dotenv(".env.local", override=True)
     st.session_state["env_loaded_once"] = True
 
-import io, sys, json, subprocess, time, uuid, shutil
+import io, sys, json, subprocess, time, shutil
 from datetime import datetime, UTC
 from src.ui.log_stream import subscribe as log_subscribe, get_auto_profile, recent_counts
 from pathlib import Path
 from src.auto import reward_human_names, AlgoController
-from src.ui.tasks import run_bg, poll, set_progress
+from src.ui.tasks import run_bg, poll
 
 from src.utils.config import load_config
 from src.utils import paths
 from src.reports.human_friendly import render_panel, to_human
 from src.utils.device import get_device, get_device_badge, set_cpu_threads
 from src.data.symbol_discovery import discover_symbols, discover_summary
-from src.data.pipeline import prepare_data
+from src.data import pipeline
 from src.data import validate_symbols
 from src.auto.strategy_selector import choose_algo
 from src.auto.hparam_tuner import tune
@@ -520,38 +520,48 @@ selected_symbols = selected_valid
 cfg["symbols"] = selected_valid
 
 st.subheader("📥 Datos")
-if "prep_job" not in st.session_state:
-    st.session_state["prep_job"] = None
-
-status_box = st.empty()
-
-job_id = st.session_state.get("prep_job")
-if job_id:
-    info = poll(job_id)
-    label = info.get("progress") or "Preparando…"
-    state = info.get("state")
-    if state == "running":
-        status_box.status(label, expanded=True)
-        time.sleep(0.5)
-        st.rerun()
-    elif state == "done":
-        status_box.status(label or "Refresco en marcha ✔", state="complete")
-        st.session_state["data_ready"] = True
-        st.session_state["prep_job"] = None
-        st.rerun()
-    elif state == "error":
-        status_box.status(f"Error: {info.get('error')}", state="error")
-        st.session_state["prep_job"] = None
+if hasattr(st, "status"):
+    with st.status("Esperando orden…", expanded=True) as status:
+        if st.button("Preparar"):
+            status.update(label="Obteniendo…", state="running")
+            job_id = run_bg(
+                "prepare_data",
+                pipeline.prepare_data,
+                auto_refresh=True,
+                refresh_every_min=5,
+            )
+            while True:
+                info = poll(job_id)
+                if info["state"] == "running":
+                    st.write(info.get("progress", "Trabajando…"))
+                    time.sleep(0.5)
+                elif info["state"] == "done":
+                    st.session_state["data_ready"] = True
+                    status.update(label="Listo ✔", state="complete")
+                    break
+                else:
+                    status.update(label=f"Error: {info['error']}", state="error")
+                    break
 else:
-    if st.button("Preparar datos (auto)"):
-        job_id = f"prepare_data-{uuid.uuid4().hex[:8]}"
-
-        def _report(msg: str, j=job_id) -> None:
-            set_progress(j, msg)
-
-        run_bg("prepare_data", prepare_data, job_id=job_id, progress_cb=_report)
-        st.session_state["prep_job"] = job_id
-        st.rerun()
+    if st.button("Preparar"):
+        with st.spinner("Obteniendo…"):
+            job_id = run_bg(
+                "prepare_data",
+                pipeline.prepare_data,
+                auto_refresh=True,
+                refresh_every_min=5,
+            )
+            while True:
+                info = poll(job_id)
+                if info["state"] == "running":
+                    time.sleep(0.5)
+                elif info["state"] == "done":
+                    st.session_state["data_ready"] = True
+                    break
+                else:
+                    st.error(f"Error: {info['error']}")
+                    break
+        st.success("Listo ✔")
 
 st.subheader("🧠 Entrenamiento")
 colt1, colt2 = st.columns(2)
