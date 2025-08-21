@@ -81,7 +81,17 @@ def get_exchange(name: str | None = None, *, use_testnet: bool | None = None):
     if name and name.lower() != "binance":
         raise ValueError("only binance exchange is supported")
 
-    key, sec, env_testnet = load_binance_creds()
+    try:
+        key, sec, env_testnet = load_binance_creds()
+    except RuntimeError:
+        # Cuando no hay credenciales configuradas permitimos continuar con
+        # acceso solo a endpoints públicos.  Esto permite preparar datos
+        # básicos sin necesidad de claves de API.
+        key = ""
+        sec = ""
+        env_testnet = False
+        logger.warning("Credenciales Binance no configuradas; usando acceso público")
+
     use_testnet = env_testnet if use_testnet is None else use_testnet
 
     ex = ccxt.binance({"apiKey": key, "secret": sec, "enableRateLimit": True})
@@ -132,8 +142,19 @@ def fetch_ohlcv(
         if tf is None:  # pragma: no cover - unlikely for Binance
             raise ValueError("no supported timeframe found")
         logger.info("selected_timeframe=%s", tf)
-
-    data = exchange.fetch_ohlcv(symbol, timeframe=tf, since=since, limit=limit)
+    logger.info(
+        "fetching_ohlcv symbol=%s timeframe=%s since=%s limit=%s",
+        symbol,
+        tf,
+        since,
+        limit,
+    )
+    try:
+        data = exchange.fetch_ohlcv(symbol, timeframe=tf, since=since, limit=limit)
+    except Exception:
+        logger.exception("error_fetching_ohlcv symbol=%s timeframe=%s", symbol, tf)
+        raise
+    logger.info("fetched_rows=%d", len(data))
     df = pd.DataFrame(data, columns=["ts", "open", "high", "low", "close", "volume"])
     df.attrs["timeframe"] = tf
     return df

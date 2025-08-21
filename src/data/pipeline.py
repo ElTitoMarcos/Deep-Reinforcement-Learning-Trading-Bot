@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from typing import Callable, List
+import logging
 
 from .ccxt_loader import get_exchange, fetch_ohlcv
 from .symbol_discovery import discover_symbols
@@ -10,6 +11,9 @@ from .ensure import ensure_ohlcv
 from .incremental import update_all
 from .refresh_worker import start_refresh_worker
 from .microv5_loader import MicroV5Collector
+
+
+logger = logging.getLogger(__name__)
 
 
 def prepare_data(
@@ -22,9 +26,13 @@ def prepare_data(
 ) -> List[str]:
     """Run the full data preparation pipeline and return discovered symbols."""
 
+    if not logging.getLogger().hasHandlers():
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
     def report(msg: str) -> None:
         if progress_cb:
             progress_cb(msg)
+        logger.info(msg)
 
     ex = get_exchange()
     report("Descubriendo…")

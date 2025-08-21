@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterable
 
+import logging
 import pandas as pd
 
 from ..utils import paths
@@ -13,6 +14,8 @@ from .ccxt_loader import fetch_ohlcv, get_exchange
 from datetime import datetime, UTC, timedelta
 
 _EXCHANGE = "binance"
+
+logger = logging.getLogger(__name__)
 
 
 def _manifest_path(symbol: str, timeframe: str) -> Path:
@@ -33,10 +36,17 @@ def fetch_ohlcv_incremental(
     exchange: Any, symbol: str, timeframe: str, since_ms: int | None = None
 ) -> pd.DataFrame:
     """Fetch OHLCV rows newer than ``since_ms``."""
+    logger.info(
+        "fetch_incremental symbol=%s timeframe=%s since=%s",
+        symbol,
+        timeframe,
+        since_ms,
+    )
     dfs: list[pd.DataFrame] = []
     since = since_ms
     while True:
         df = fetch_ohlcv(exchange, symbol, timeframe, since=since)
+        logger.info("fetched_rows=%d", len(df))
         if df.empty:
             break
         dfs.append(df)
@@ -47,7 +57,10 @@ def fetch_ohlcv_incremental(
             break
         since = last_ts + 1
     if dfs:
-        return pd.concat(dfs, ignore_index=True)
+        result = pd.concat(dfs, ignore_index=True)
+        logger.info("total_rows=%d", len(result))
+        return result
+    logger.info("no_new_rows")
     return pd.DataFrame(columns=["ts", "open", "high", "low", "close", "volume"])
 
 
@@ -107,8 +120,10 @@ def update_all(
             since = int(
                 (datetime.now(UTC) - timedelta(days=lookback_days)).timestamp() * 1000
             )
+        logger.info("update_all symbol=%s since=%s", sym, since)
         df_new = fetch_ohlcv_incremental(ex, sym, timeframe, since_ms=since)
         if df_new.empty:
+            logger.info("no_updates symbol=%s", sym)
             continue
         path = paths.raw_parquet_path(
             ex.id if hasattr(ex, "id") else _EXCHANGE, sym, timeframe
@@ -122,3 +137,4 @@ def update_all(
         }
         with open(path.with_suffix(".manifest.json"), "w", encoding="utf-8") as f:
             json.dump(manifest, f, indent=2)
+        logger.info("upserted_rows=%d path=%s", len(df_new), path)
